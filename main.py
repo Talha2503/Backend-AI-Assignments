@@ -19,7 +19,7 @@ tasks = [
 next_id = 4
 
 
-@app.get("/")
+@app.get("/", summary="API info", description="Returns basic info about this API and its endpoints.")
 def root():
     return {
         "name": "Task API",
@@ -28,17 +28,17 @@ def root():
     }
 
 
-@app.get("/health")
+@app.get("/health", summary="Health check", description="Confirms the server is alive. Used by monitoring tools.")
 def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks")
+@app.get("/tasks", summary="List all tasks", description="Returns every task currently stored in memory.")
 def list_tasks():
     return tasks
 
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", summary="Get one task", description="Returns a single task by id, or 404 if it doesn't exist.")
 def get_task(task_id: int):
     for task in tasks:
         if task["id"] == task_id:
@@ -46,7 +46,7 @@ def get_task(task_id: int):
     raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
 
-@app.post("/tasks", status_code=201)
+@app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task. Title is required and cannot be empty.")
 def create_task(payload: TaskCreate):
     global next_id
     if not payload.title or not payload.title.strip():
@@ -58,7 +58,7 @@ def create_task(payload: TaskCreate):
     return task
 
 
-@app.put("/tasks/{task_id}")
+@app.put("/tasks/{task_id}", summary="Update a task", description="Replaces a task's title and done status. 404 if the task doesn't exist.")
 def update_task(task_id: int, payload: TaskCreate):
     if not payload.title or not payload.title.strip():
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
@@ -71,7 +71,7 @@ def update_task(task_id: int, payload: TaskCreate):
     raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
 
-@app.delete("/tasks/{task_id}", status_code=204)
+@app.delete("/tasks/{task_id}", status_code=204, summary="Delete a task", description="Removes a task permanently. 404 if it doesn't exist.")
 def delete_task(task_id: int):
     for i, task in enumerate(tasks):
         if task["id"] == task_id:
