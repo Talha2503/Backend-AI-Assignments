@@ -9,6 +9,10 @@ class TaskCreate(BaseModel):
 
 app = FastAPI(title="Task API", version="1.0")
 
+from database import init_db
+
+init_db()
+
 # In-memory "database" -- a plain Python list.
 # Resets every time the server restarts (that's Week 3's lesson).
 tasks = [
