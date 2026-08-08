@@ -94,29 +94,7 @@ Honestly, not much — the core CRUD logic (loop over the list, match by id) is 
 - Accepts an empty string `""` as a valid title (no `.strip()` check) — mine rejects it
 - `DELETE` returns `200` with a message body instead of `204` with an empty body
 
-## AI vs me (Stage 6, Week 3 — the database migration)
 
-**My prompt:**
-> So what I did was store a database in the CRUD that was empty before, that's it.
-
-**What the AI did better:**
-Nothing, really — my prompt was extremely thin, so the AI had to guess at almost everything, and most of its guesses were wrong or unsafe. If anything, this run proved how much a vague prompt costs you.
-
-**What it got wrong or ignored:**
-- The seed data duplicates every time the server restarts — no "only insert if the table is empty" check, so 3 tasks became 6 after a single restart
-- `GET /tasks/{id}` builds the SQL query with an f-string (`WHERE id = {task_id}`) instead of a parameterized `?` placeholder — a real SQL injection risk, not just a style issue
-- `PUT` and `DELETE` never check whether a row actually existed before responding — updating or deleting a nonexistent id still returns `200`, never `404`
-- Missing `title` returns FastAPI's default `422` instead of the `400` my original API used
-- `done` comes back as `0`/`1` instead of `true`/`false`, breaking the "the API doesn't change" promise from Assignment 1
-- `DELETE` returns `200` with a message body instead of `204` with an empty body
-
-**What my prompt forgot to specify — and what the AI silently decided:**
-Almost everything. I never said which database to use (it guessed SQLite, correctly, but that was luck), never mentioned seeding at all, never said to reuse parameterized queries, and never restated the 400/404/204 status code rules from Assignment 1. The AI filled every one of those gaps with its own defaults, and most of those defaults were either insecure or wrong.
-
-**One rematch:**
-A much better prompt would specify: "Migrate this in-memory FastAPI CRUD API to SQLite. Use parameterized queries only. Seed 3 example tasks, but only if the table is empty — never duplicate them on restart. Keep the exact same endpoints, status codes (400 for invalid input, 404 for unknown id, 204 for delete), and response shapes as before." That single paragraph would have caught nearly every bug above.
-
-**What my prompt forgot to specify — and what the AI silently decided:**
 I never specified the seed data, the health check endpoint, the exact status codes (400 vs 422, 204 vs 200), or that empty-string titles should be rejected too. The AI just picked its own defaults for all of that — mostly FastAPI's out-of-the-box validation behavior — instead of the exact rules the assignment wanted.
 
 **One rematch:**
