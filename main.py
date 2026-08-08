@@ -71,18 +71,28 @@ def update_task(task_id: int, payload: TaskCreate):
     if not payload.title or not payload.title.strip():
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
 
-    for task in tasks:
-        if task["id"] == task_id:
-            task["title"] = payload.title
-            task["done"] = payload.done
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    conn = get_connection()
+    cursor = conn.execute(
+        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
+        (payload.title, int(payload.done), task_id),
+    )
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return row_to_task(row)
 
 
 @app.delete("/tasks/{task_id}", status_code=204, summary="Delete a task", description="Removes a task permanently. 404 if it doesn't exist.")
 def delete_task(task_id: int):
-    for i, task in enumerate(tasks):
-        if task["id"] == task_id:
-            tasks.pop(i)
-            return
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    conn = get_connection()
+    cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
