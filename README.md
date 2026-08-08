@@ -1,3 +1,4 @@
+markdown
 # Task API
 
 A small CRUD API for managing a to-do list, built with FastAPI and backed by a SQLite database. Built as part of the FlyRank Backend AI Engineering internship — Week 2 (in-memory) and Week 3 (SQLite persistence).
