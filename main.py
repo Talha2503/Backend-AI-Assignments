@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from database import init_db, get_connection
 
 
 class TaskCreate(BaseModel):
@@ -8,19 +9,21 @@ class TaskCreate(BaseModel):
 
 
 app = FastAPI(title="Task API", version="1.0")
-
-from database import init_db
-
 init_db()
 
 # In-memory "database" -- a plain Python list.
-# Resets every time the server restarts (that's Week 3's lesson).
+# Still used by POST/PUT/DELETE for now -- Stages 2-3 move these to SQL too.
 tasks = [
     {"id": 1, "title": "Buy groceries", "done": False},
     {"id": 2, "title": "Finish assignment", "done": False},
     {"id": 3, "title": "Walk the dog", "done": True},
 ]
 next_id = 4
+
+
+def row_to_task(row):
+    """Convert a sqlite3.Row into a plain dict with a real bool for `done`."""
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
 
 
 @app.get("/", summary="API info", description="Returns basic info about this API and its endpoints.")
@@ -37,17 +40,22 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks", summary="List all tasks", description="Returns every task currently stored in memory.")
+@app.get("/tasks", summary="List all tasks", description="Returns every task currently stored in the database.")
 def list_tasks():
-    return tasks
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM tasks").fetchall()
+    conn.close()
+    return [row_to_task(row) for row in rows]
 
 
 @app.get("/tasks/{task_id}", summary="Get one task", description="Returns a single task by id, or 404 if it doesn't exist.")
 def get_task(task_id: int):
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return row_to_task(row)
 
 
 @app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task. Title is required and cannot be empty.")
