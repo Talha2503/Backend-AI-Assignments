@@ -11,15 +11,6 @@ class TaskCreate(BaseModel):
 app = FastAPI(title="Task API", version="1.0")
 init_db()
 
-# In-memory "database" -- a plain Python list.
-# Still used by POST/PUT/DELETE for now -- Stages 2-3 move these to SQL too.
-tasks = [
-    {"id": 1, "title": "Buy groceries", "done": False},
-    {"id": 2, "title": "Finish assignment", "done": False},
-    {"id": 3, "title": "Walk the dog", "done": True},
-]
-next_id = 4
-
 
 def row_to_task(row):
     """Convert a sqlite3.Row into a plain dict with a real bool for `done`."""
@@ -60,14 +51,19 @@ def get_task(task_id: int):
 
 @app.post("/tasks", status_code=201, summary="Create a task", description="Creates a new task. Title is required and cannot be empty.")
 def create_task(payload: TaskCreate):
-    global next_id
     if not payload.title or not payload.title.strip():
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
 
-    task = {"id": next_id, "title": payload.title, "done": payload.done}
-    tasks.append(task)
-    next_id += 1
-    return task
+    conn = get_connection()
+    cursor = conn.execute(
+        "INSERT INTO tasks (title, done) VALUES (?, ?)",
+        (payload.title, int(payload.done)),
+    )
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+
+    return {"id": new_id, "title": payload.title, "done": payload.done}
 
 
 @app.put("/tasks/{task_id}", summary="Update a task", description="Replaces a task's title and done status. 404 if the task doesn't exist.")
