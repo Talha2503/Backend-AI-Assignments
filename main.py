@@ -56,12 +56,14 @@ def create_task(payload: TaskCreate):
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
 
     conn = get_connection()
-    cursor = conn.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (payload.title, int(payload.done)),
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO tasks (title, done) VALUES (%s, %s) RETURNING id",
+        (payload.title, payload.done),
     )
+    new_id = cur.fetchone()[0]
     conn.commit()
-    new_id = cursor.lastrowid
+    cur.close()
     conn.close()
 
     return {"id": new_id, "title": payload.title, "done": payload.done}
@@ -73,27 +75,35 @@ def update_task(task_id: int, payload: TaskCreate):
         raise HTTPException(status_code=400, detail="Title is required and cannot be empty")
 
     conn = get_connection()
-    cursor = conn.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-        (payload.title, int(payload.done), task_id),
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE tasks SET title = %s, done = %s WHERE id = %s",
+        (payload.title, payload.done, task_id),
     )
+    updated = cur.rowcount
     conn.commit()
 
-    if cursor.rowcount == 0:
+    if updated == 0:
+        cur.close()
         conn.close()
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    cur.execute("SELECT id, title, done FROM tasks WHERE id = %s", (task_id,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
-    return row_to_task(row)
+    return {"id": row[0], "title": row[1], "done": row[2]}
 
 
 @app.delete("/tasks/{task_id}", status_code=204, summary="Delete a task", description="Removes a task permanently. 404 if it doesn't exist.")
 def delete_task(task_id: int):
     conn = get_connection()
-    cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    cur = conn.cursor()
+    cur.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
+    deleted = cur.rowcount
     conn.commit()
+    cur.close()
     conn.close()
 
-    if cursor.rowcount == 0:
+    if deleted == 0:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
