@@ -91,3 +91,25 @@ I never specified the seed data, the health check endpoint, the exact status cod
 
 **One rematch:**
 Adding "reject empty-string titles with 400, return 204 with no body on delete, and include GET / and GET /health" to my prompt would fix most of these gaps in one pass.
+
+## AI vs me (Stage 6, Week 3 — containerizing the stack)
+
+**My prompt:**
+> So for this assignment I used Docker Desktop, Postgres as the database. On startup it creates a table of 4 rows and its status is healthy.
+
+**What the AI did better:**
+Nothing, really — the prompt was thin enough that the AI had to guess at nearly everything, and most of its guesses skipped the exact parts of this assignment that mattered (secrets, persistence, startup ordering).
+
+**What it got wrong or ignored:**
+- Hardcoded the database password directly in the code instead of reading it from `.env` — exactly the secret-leak risk this assignment exists to prevent
+- No volume on the `db` service — if the container is ever removed, all data is gone, which defeats the entire point of containerizing storage
+- No healthcheck or `depends_on: condition: service_healthy` — this hits the exact startup race condition I ran into myself: the app can try to connect before Postgres is actually ready and crash
+- No "only seed if empty" check — the 4 example rows would duplicate on every single restart
+- `GET /tasks/{id}` builds its SQL with an f-string instead of a parameterized placeholder — a real injection risk
+- `DELETE` returns `200` with a message body instead of `204` empty, breaking the status-code contract carried over from Assignments 1 and 2
+
+**What my prompt forgot to specify — and what the AI silently decided:**
+I never mentioned `.env`, secrets, volumes, a healthcheck, the seed-once rule, or parameterized queries at all — the AI filled in every one of those gaps with the least-safe option each time. My prompt also just said "creates a table of 4 rows," so it correctly saw 4 rows, but couldn't have known that count is meant to hold steady across restarts, not grow.
+
+**One rematch:**
+A better prompt would specify: "Containerize this FastAPI + Postgres CRUD API with Docker Compose. Read the database password from a `.env` file, never hardcode it. Use a named volume so data survives `docker compose down`. Add a Postgres healthcheck and make the app service wait for it. Seed 3 example tasks only if the table is empty. Keep all queries parameterized, and keep the exact same endpoints and status codes (400/404/204) as before." That single paragraph would have caught every issue above.
