@@ -20,6 +20,7 @@ OUTPUT_DIR = Path("output")
 RAW_OUTPUT_FILE = OUTPUT_DIR / "raw-books.json"
 NORMALIZED_OUTPUT_FILE = OUTPUT_DIR / "books.json"
 ERROR_OUTPUT_FILE = OUTPUT_DIR / "errors.json"
+RUN_REPORT_FILE = OUTPUT_DIR / "run-report.json"
 
 USER_AGENT = (
     "FlyRankInternshipA9/1.0 "
@@ -28,6 +29,20 @@ USER_AGENT = (
 
 TIMEOUT = 10
 DELAY = 0.5
+MAX_RETRIES = 1
+
+# Set to a fake URL only when running the controlled Stage 5
+# failure-handling test.
+#
+# Example:
+# TEST_FAILURE_URL = (
+#     "https://books.toscrape.com/catalogue/"
+#     "this-page-does-not-exist_99999/index.html"
+# )
+#
+# Leave as None for the normal scraper run.
+TEST_FAILURE_URL = None
+
 
 session = requests.Session()
 session.headers.update({
@@ -35,13 +50,45 @@ session.headers.update({
 })
 
 
+# ---------------------------------------------------------
+# Run statistics
+# ---------------------------------------------------------
+
+stats = {
+    "pages_fetched": 0,
+    "cache_hits": 0,
+    "retries": 0,
+}
+
+
+# ---------------------------------------------------------
+# Fetching
+# ---------------------------------------------------------
+
 def fetch_page(url, cache_file):
+    """
+    Fetch a page while respecting cache, timeout, user-agent,
+    retry rules, and request delay.
+
+    Retry rules:
+    - Timeout: retry once
+    - HTTP 5xx: retry once
+    - HTTP 403: do not retry
+    - HTTP 404: do not retry
+    - Other non-200 responses: do not retry
+    """
+
     if cache_file.exists():
         html = cache_file.read_text(
             encoding="utf-8"
         )
 
-        print(f"CACHE HIT: {cache_file}")
+        stats["cache_hits"] += 1
+
+        print(
+            f"CACHE HIT: {cache_file}"
+        )
+
         print(
             f"response_size="
             f"{len(html.encode('utf-8'))} bytes"
@@ -49,47 +96,128 @@ def fetch_page(url, cache_file):
 
         return html
 
-    print(f"FETCH: {url}")
-
-    response = session.get(
-        url,
-        timeout=TIMEOUT
-    )
-
     print(
-        f"FETCH SUCCESS: status={response.status_code}"
+        f"FETCH: {url}"
     )
 
-    if response.status_code != 200:
+    attempt = 0
+
+    while True:
+        try:
+            response = session.get(
+                url,
+                timeout=TIMEOUT
+            )
+
+        except requests.exceptions.Timeout as error:
+            if attempt < MAX_RETRIES:
+                attempt += 1
+                stats["retries"] += 1
+
+                print(
+                    f"RETRY {attempt}/{MAX_RETRIES}: "
+                    f"timeout for {url}"
+                )
+
+                time.sleep(DELAY)
+                continue
+
+            raise RuntimeError(
+                f"Request timed out after "
+                f"{MAX_RETRIES + 1} attempts: {url}"
+            ) from error
+
+        except requests.RequestException as error:
+            raise RuntimeError(
+                f"Request failed for {url}: {error}"
+            ) from error
+
+        print(
+            f"FETCH RESPONSE: status="
+            f"{response.status_code}"
+        )
+
+        # -------------------------------------------------
+        # Success
+        # -------------------------------------------------
+
+        if response.status_code == 200:
+            stats["pages_fetched"] += 1
+
+            response.encoding = "utf-8"
+            html = response.text
+
+            cache_file.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+            cache_file.write_text(
+                html,
+                encoding="utf-8"
+            )
+
+            print(
+                f"response_size="
+                f"{len(html.encode('utf-8'))} bytes"
+            )
+
+            print(
+                f"cached_to={cache_file}"
+            )
+
+            return html
+
+        # -------------------------------------------------
+        # Retry 5xx once
+        # -------------------------------------------------
+
+        if 500 <= response.status_code <= 599:
+            if attempt < MAX_RETRIES:
+                attempt += 1
+                stats["retries"] += 1
+
+                print(
+                    f"RETRY {attempt}/{MAX_RETRIES}: "
+                    f"HTTP {response.status_code} for {url}"
+                )
+
+                time.sleep(DELAY)
+                continue
+
+            raise RuntimeError(
+                f"Server error after "
+                f"{MAX_RETRIES + 1} attempts: "
+                f"HTTP {response.status_code} for {url}"
+            )
+
+        # -------------------------------------------------
+        # Do NOT retry 403 / 404
+        # -------------------------------------------------
+
+        if response.status_code == 403:
+            raise RuntimeError(
+                f"HTTP 403 Forbidden: {url}"
+            )
+
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"HTTP 404 Not Found: {url}"
+            )
+
+        # -------------------------------------------------
+        # Any other non-200 status
+        # -------------------------------------------------
+
         raise RuntimeError(
             f"Failed to fetch {url}: "
             f"HTTP {response.status_code}"
         )
 
-    # Books to Scrape serves UTF-8 HTML.
-    # Use UTF-8 explicitly to avoid values such as Â£.
-    response.encoding = "utf-8"
-    html = response.text
 
-    cache_file.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    cache_file.write_text(
-        html,
-        encoding="utf-8"
-    )
-
-    print(
-        f"response_size="
-        f"{len(html.encode('utf-8'))} bytes"
-    )
-
-    print(f"cached_to={cache_file}")
-
-    return html
-
+# ---------------------------------------------------------
+# Catalogue discovery
+# ---------------------------------------------------------
 
 def discover_book_urls():
     book_urls = []
@@ -153,20 +281,40 @@ def discover_book_urls():
         if product_url not in unique:
             unique[product_url] = source_page
 
+    # -----------------------------------------------------
+    # Controlled Stage 5 failure test
+    # -----------------------------------------------------
+
+    if TEST_FAILURE_URL:
+        unique[TEST_FAILURE_URL] = CATALOGUE_URL.format(1)
+
+        print()
+        print(
+            "TEST MODE: added one fake URL "
+            "to verify failure handling."
+        )
+
     print()
     print(
         f"catalogue_pages={catalogue_pages}"
     )
+
     print(
         f"discovered={len(book_urls)}"
     )
+
     print(
         f"unique_urls={len(unique)}"
     )
+
     print()
 
     return unique
 
+
+# ---------------------------------------------------------
+# Extraction helpers
+# ---------------------------------------------------------
 
 def extract_rating(soup):
     rating_element = soup.select_one(
@@ -210,6 +358,10 @@ def extract_description(soup):
     return text if text else None
 
 
+# ---------------------------------------------------------
+# Book extraction
+# ---------------------------------------------------------
+
 def extract_book(
     product_url,
     source_page,
@@ -228,6 +380,8 @@ def extract_book(
         cache_file
     )
 
+    # Only delay after a real network request.
+    # Cached pages never leave the computer.
     if not was_cached:
         time.sleep(DELAY)
 
@@ -299,16 +453,18 @@ def extract_book(
     return record
 
 
+# ---------------------------------------------------------
+# Price normalization
+# ---------------------------------------------------------
+
 def normalize_price(price_text):
     if not isinstance(price_text, str):
         return None
 
-    # Handle both the correct pound sign and the
-    # previously corrupted Â£ representation.
     cleaned = (
         price_text
-        .replace("Â£", "")
-        .replace("£", "")
+        .replace("├é┬ú", "")
+        .replace("┬ú", "")
         .strip()
     )
 
@@ -320,8 +476,14 @@ def normalize_price(price_text):
     if not match:
         return None
 
-    return float(match.group())
+    return float(
+        match.group()
+    )
 
+
+# ---------------------------------------------------------
+# Record validation
+# ---------------------------------------------------------
 
 def validate_record(record):
     errors = []
@@ -345,19 +507,27 @@ def validate_record(record):
     if errors:
         return errors
 
-    if not isinstance(record["title"], str):
+    if not isinstance(
+        record["title"],
+        str
+    ):
         errors.append(
             "title must be a string"
         )
+
     elif not record["title"].strip():
         errors.append(
             "title must not be empty"
         )
 
-    if not isinstance(record["product_url"], str):
+    if not isinstance(
+        record["product_url"],
+        str
+    ):
         errors.append(
             "product_url must be a string"
         )
+
     elif not record["product_url"].startswith(
         "https://"
     ):
@@ -365,7 +535,10 @@ def validate_record(record):
             "product_url must start with https://"
         )
 
-    if not isinstance(record["price_text"], str):
+    if not isinstance(
+        record["price_text"],
+        str
+    ):
         errors.append(
             "price_text must be a string"
         )
@@ -411,6 +584,7 @@ def validate_record(record):
         errors.append(
             "source_page must be a string"
         )
+
     elif not record["source_page"].startswith(
         "https://"
     ):
@@ -429,13 +603,21 @@ def validate_record(record):
     return errors
 
 
+# ---------------------------------------------------------
+# Record normalization
+# ---------------------------------------------------------
+
 def normalize_record(raw_record):
     price_gbp = normalize_price(
-        raw_record.get("price_text")
+        raw_record.get(
+            "price_text"
+        )
     )
 
     normalized_record = {
-        "title": raw_record.get("title"),
+        "title": raw_record.get(
+            "title"
+        ),
         "product_url": raw_record.get(
             "product_url"
         ),
@@ -469,10 +651,7 @@ def normalize_records(raw_records):
 
     seen_urls = set()
 
-    for index, raw_record in enumerate(
-        raw_records,
-        start=1
-    ):
+    for raw_record in raw_records:
         normalized_record = normalize_record(
             raw_record
         )
@@ -504,7 +683,10 @@ def normalize_records(raw_records):
 
             continue
 
-        seen_urls.add(product_url)
+        seen_urls.add(
+            product_url
+        )
+
         valid_records.append(
             normalized_record
         )
@@ -514,6 +696,10 @@ def normalize_records(raw_records):
         invalid_records
     )
 
+
+# ---------------------------------------------------------
+# JSON helper
+# ---------------------------------------------------------
 
 def save_json(file_path, data):
     file_path.parent.mkdir(
@@ -531,7 +717,22 @@ def save_json(file_path, data):
     )
 
 
+# ---------------------------------------------------------
+# Main
+# ---------------------------------------------------------
+
 def main():
+    run_started = datetime.now(
+        timezone.utc
+    )
+
+    start_time = time.perf_counter()
+
+    # Reset statistics for this run.
+    stats["pages_fetched"] = 0
+    stats["cache_hits"] = 0
+    stats["retries"] = 0
+
     unique_books = discover_book_urls()
 
     records = []
@@ -540,6 +741,7 @@ def main():
     print(
         "Extracting book details..."
     )
+
     print()
 
     for index, (
@@ -556,19 +758,27 @@ def main():
                 index
             )
 
-            records.append(record)
+            records.append(
+                record
+            )
 
             print(
-                f"book={index}/{len(unique_books)} "
+                f"book={index}/"
+                f"{len(unique_books)} "
                 f"title={record['title']}"
             )
 
         except Exception as error:
-            failures.append({
+            failure = {
                 "product_url": product_url,
                 "error": str(error)
-            })
+            }
 
+            failures.append(
+                failure
+            )
+
+            print()
             print(
                 f"FAILED: {product_url}"
             )
@@ -576,6 +786,12 @@ def main():
             print(
                 f"error={error}"
             )
+
+            print()
+
+    # -----------------------------------------------------
+    # Save raw records
+    # -----------------------------------------------------
 
     save_json(
         RAW_OUTPUT_FILE,
@@ -586,6 +802,10 @@ def main():
     print(
         "Normalizing extracted records..."
     )
+
+    # -----------------------------------------------------
+    # Normalize and validate
+    # -----------------------------------------------------
 
     valid_records, invalid_records = (
         normalize_records(records)
@@ -600,6 +820,47 @@ def main():
         ERROR_OUTPUT_FILE,
         invalid_records
     )
+
+    # -----------------------------------------------------
+    # Run statistics
+    # -----------------------------------------------------
+
+    run_finished = datetime.now(
+        timezone.utc
+    )
+
+    duration_seconds = (
+        time.perf_counter()
+        - start_time
+    )
+
+    run_report = {
+        "started_at": run_started.isoformat(),
+        "finished_at": run_finished.isoformat(),
+        "duration_seconds": round(
+            duration_seconds,
+            3
+        ),
+        "catalogue_pages": 3,
+        "discovered_urls": len(unique_books),
+        "pages_fetched": stats["pages_fetched"],
+        "cache_hits": stats["cache_hits"],
+        "retries": stats["retries"],
+        "detail_pages_processed": len(records),
+        "valid_records": len(valid_records),
+        "invalid_records": len(invalid_records),
+        "failed_pages": len(failures),
+        "failures": failures
+    }
+
+    save_json(
+        RUN_REPORT_FILE,
+        run_report
+    )
+
+    # -----------------------------------------------------
+    # Console summary
+    # -----------------------------------------------------
 
     print(
         f"detail_pages={len(records)}"
@@ -618,6 +879,18 @@ def main():
     )
 
     print(
+        f"pages_fetched={stats['pages_fetched']}"
+    )
+
+    print(
+        f"cache_hits={stats['cache_hits']}"
+    )
+
+    print(
+        f"retries={stats['retries']}"
+    )
+
+    print(
         f"raw_saved_to={RAW_OUTPUT_FILE}"
     )
 
@@ -628,6 +901,14 @@ def main():
     print(
         f"errors_saved_to={ERROR_OUTPUT_FILE}"
     )
+
+    print(
+        f"run_report_saved_to={RUN_REPORT_FILE}"
+    )
+
+    # -----------------------------------------------------
+    # Sample record
+    # -----------------------------------------------------
 
     if valid_records:
         print()
@@ -646,3 +927,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
