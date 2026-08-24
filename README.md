@@ -1,115 +1,309 @@
 # Task API
 
-A CRUD API for managing a to-do list, built with FastAPI and backed by a PostgreSQL database running in Docker. Built as part of the FlyRank Backend AI Engineering internship — Week 2 (in-memory), Week 3 (SQLite), and this stage (containerized Postgres).
+A secure REST API built with FastAPI, PostgreSQL, Docker, and Supabase Authentication. The project provides task CRUD operations, user signup/login/logout, JWT-based authentication, protected routes, reusable authentication middleware, and interactive Swagger documentation.
+
+Built as part of the FlyRank Backend AI Engineering internship.
 
 ## What this is
 
-A REST API that supports full CRUD (Create, Read, Update, Delete) on a list of tasks. Data is stored in a PostgreSQL database running in a Docker container, and the whole stack (app + database) starts with a single command.
+Task API is a backend service for managing a to-do list.
+
+The project includes:
+
+* FastAPI REST API
+* PostgreSQL database running in Docker
+* Supabase Authentication
+* User signup and login
+* JWT access-token authentication
+* Reusable authentication dependency for protected routes
+* Protected task endpoints
+* Public and protected example routes
+* Logout endpoint
+* Swagger UI with Bearer JWT authentication
+* Persistent PostgreSQL storage using a Docker volume
+
+## Features
+
+### Authentication
+
+* `POST /auth/signup` — Create a new Supabase user
+* `POST /auth/login` — Authenticate a user and receive access/refresh tokens
+* `POST /auth/logout` — Log out an authenticated user
+
+### Protected routes
+
+* `GET /protected/profile` — Returns authenticated user information
+* `GET /protected/dashboard` — Example protected route
+* All `/tasks` endpoints require a valid Supabase access token
+
+### Public routes
+
+* `GET /` — API information
+* `GET /health` — Health check
+* `GET /public/info` — Public information endpoint
 
 ## How to run it
 
-1. Copy `.env.example` to `.env` (already set up for the compose stack, no changes needed for local dev)
-2. Run:
+### 1. Configure environment variables
 
-docker compose up
+Copy `.env.example` to `.env`:
 
+```bash
+copy .env.example .env
+```
 
-That's it — this builds the app image, starts Postgres, waits for it to be healthy, then starts the API. The server is available at http://localhost:8000. Interactive Swagger docs are at http://localhost:8000/docs.
+Add your own Supabase credentials to `.env`.
 
-To stop everything: `docker compose down` (add `-v` to also wipe the database volume and start completely fresh).
+Never commit `.env` to GitHub.
+
+The repository includes `.env.example` as a safe template containing placeholder values.
+
+### 2. Start the application
+
+Run:
+
+```bash
+docker compose up --build
+```
+
+This builds the API image, starts PostgreSQL, waits for the database to become healthy, and starts the FastAPI server.
+
+The API will be available at:
+
+`http://localhost:8000`
+
+Interactive Swagger documentation is available at:
+
+`http://localhost:8000/docs`
+
+To stop the application:
+
+```bash
+docker compose down
+```
+
+To remove the database volume and start completely fresh:
+
+```bash
+docker compose down -v
+```
 
 ## Environment variables
 
-See `.env.example` for the required variable:
+The application uses environment variables for configuration and secrets.
 
-DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+See `.env.example` for the required variable names.
 
+Example:
 
-Inside `compose.yaml`, the app actually connects to the database using the service name `db` instead of `localhost`, since containers on the same Docker network reach each other by service name, not `localhost`.
+```env
+DATABASE_URL=postgres://postgres:dev@db:5432/tasks
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_KEY=your_supabase_anon_key
+```
 
-## Endpoints
+Do not put real Supabase credentials in the README, source code, or GitHub repository.
 
-| Method | Path | Description | Success | Errors |
-|---|---|---|---|---|
-| GET | / | API info | 200 | — |
-| GET | /health | Health check | 200 | — |
-| GET | /tasks | List all tasks | 200 | — |
-| GET | /tasks/{id} | Get one task | 200 | 404 |
-| POST | /tasks | Create a task | 201 | 400 |
-| PUT | /tasks/{id} | Update a task's title/done | 200 | 400, 404 |
-| DELETE | /tasks/{id} | Delete a task | 204 | 404 |
+The `.env` file is included in `.gitignore`.
 
-## Example request
+## API Reference
 
-curl -i -X POST http://localhost:8000/tasks
--H "Content-Type: application/json"
--d '{"title":"Buy milk"}'
+| Method | Endpoint               | Description                        | Authentication | Success | Errors        |
+| ------ | ---------------------- | ---------------------------------- | -------------- | ------- | ------------- |
+| POST   | `/auth/signup`         | Create a new user                  | No             | 201     | 400           |
+| POST   | `/auth/login`          | Log in and receive JWT tokens      | No             | 200     | 400, 401      |
+| POST   | `/auth/logout`         | Log out the current user           | Yes            | 204     | 401           |
+| GET    | `/public/info`         | Public information                 | No             | 200     | —             |
+| GET    | `/protected/profile`   | Get authenticated user information | Yes            | 200     | 401           |
+| GET    | `/protected/dashboard` | Protected dashboard example        | Yes            | 200     | 401           |
+| GET    | `/`                    | API information                    | No             | 200     | —             |
+| GET    | `/health`              | Health check                       | No             | 200     | —             |
+| GET    | `/tasks`               | List all tasks                     | Yes            | 200     | 401           |
+| GET    | `/tasks/{id}`          | Get one task                       | Yes            | 200     | 401, 404      |
+| POST   | `/tasks`               | Create a task                      | Yes            | 201     | 400, 401      |
+| PUT    | `/tasks/{id}`          | Update a task                      | Yes            | 200     | 400, 401, 404 |
+| DELETE | `/tasks/{id}`          | Delete a task                      | Yes            | 204     | 401, 404      |
 
-HTTP/1.1 201 Created
-content-type: application/json
+## Authentication flow
 
-{"id":4,"title":"Buy milk","done":false}
+### 1. Sign up
 
+Send an email and password to:
+
+```text
+POST /auth/signup
+```
+
+Example:
+
+```json
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+```
+
+A successful request returns `201 Created` and the Supabase user object.
+
+### 2. Log in
+
+Send the same credentials to:
+
+```text
+POST /auth/login
+```
+
+A successful request returns `200 OK` together with an access token and refresh token.
+
+The access token is a JWT and is used to access protected endpoints.
+
+### 3. Authorize protected routes
+
+In Swagger UI, click the **Authorize** button and enter:
+
+```text
+Bearer YOUR_ACCESS_TOKEN
+```
+
+After authorization, Swagger can send the JWT automatically to protected endpoints.
+
+## Protected routes
+
+The application uses FastAPI's `HTTPBearer` security scheme and a reusable authentication dependency.
+
+The authentication dependency:
+
+1. Extracts the Bearer token from the `Authorization` header.
+2. Sends the token to Supabase for verification.
+3. Rejects missing, invalid, expired, or tampered tokens with `401 Unauthorized`.
+4. Makes the authenticated Supabase user available to protected routes.
+
+This authentication dependency is reused by the protected endpoints instead of duplicating token-verification logic.
+
+## Swagger UI
+
+Interactive API documentation is available at:
+
+`http://localhost:8000/docs`
+
+Swagger provides an **Authorize** button for entering a JWT once and reusing it when testing protected endpoints.
+
+The protected routes display lock icons in Swagger.
+
+### Swagger authentication
+
+![Swagger UI with Bearer authentication](swagger-authenticated.PNG)
+
+### Protected routes
+
+![Protected routes with Bearer authentication](swagger-protected-routes.PNG)
+
+## Example authenticated request
+
+After logging in and obtaining an access token:
+
+```bash
+curl -i -X GET http://localhost:8000/protected/profile \
+-H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+A valid token returns `200 OK`.
+
+An invalid or expired token returns `401 Unauthorized`.
 
 ## Database
 
-Postgres running in Docker, queried directly via `docker compose exec db psql -U postgres -d tasks`:
+PostgreSQL runs inside Docker and is accessed by the FastAPI application through the Docker Compose network.
+
+The database uses a named Docker volume so task data survives container restarts.
+
+PostgreSQL can be accessed with:
+
+```bash
+docker compose exec db psql -U postgres -d tasks
+```
 
 ![Postgres data in psql](postgres-screenshot.png)
 
-## Persistence, proven
+## Persistence
 
-Created a task via the API, then ran `docker compose down` followed by `docker compose up` — a full teardown and recreation of both containers. The task was still there afterward, because the named volume (`taskdata`) keeps the database files on disk independent of the containers' lifecycle. Containers are disposable; the volume isn't.
+Task data persists even when the Docker containers are stopped and recreated because PostgreSQL stores its data in a named Docker volume.
 
-## The three storage swaps
+The API can therefore be stopped with:
 
-| Stage | Where tasks live | Survives a restart? |
-|---|---|---|
-| Week 2 | a Python list in memory | No |
-| Week 3 | a `tasks.db` SQLite file | Yes |
-| This stage | rows in a Postgres container | Yes, and now it's a real database server, not just a file |
+```bash
+docker compose down
+```
 
-The API's endpoints, request/response shapes, and status codes never changed across any of these three swaps — only the storage layer underneath did. That separation is the actual lesson of this whole assignment sequence.
+and started again with:
 
-## AI vs me (Week 2, Stage 7)
+```bash
+docker compose up
+```
 
-**My prompt:**
-> A small in-memory CRUD API for managing a to-do list, built with FastAPI. Built as part of the FlyRank Backend AI Engineering internship, Week 2 assignment. A REST API that supports full CRUD (Create, Read, Update, Delete) on a list of tasks. Data is stored in memory — it resets every time the server restarts. There is no database yet.
+without losing the stored tasks.
 
-**What the AI did better:**
-Honestly, not much — the core CRUD logic (loop over the list, match by id) is basically identical to mine, since there's only one obvious way to write it. I understand its version fully; it's simpler than mine because it skips validation detail.
+## Project structure
 
-**What it got wrong or ignored:**
-- No `GET /` or `/health` endpoints — I never mentioned them in my prompt, so it had no way to know
-- Didn't seed the 3 example tasks — starts with an empty list
-- Missing `title` returns FastAPI's default `422` error instead of the `400` the assignment requires
-- Accepts an empty string `""` as a valid title (no `.strip()` check) — mine rejects it
-- `DELETE` returns `200` with a message body instead of `204` with an empty body
+```text
+task-api/
+├── main.py
+├── database.py
+├── supabase_client.py
+├── requirements.txt
+├── Dockerfile
+├── compose.yaml
+├── .env.example
+├── .gitignore
+├── README.md
+├── swagger-authenticated.PNG
+├── swagger-protected-routes.PNG
+└── screenshots/
+```
 
-**What my prompt forgot to specify — and what the AI silently decided:**
-I never specified the seed data, the health check endpoint, the exact status codes (400 vs 422, 204 vs 200), or that empty-string titles should be rejected too. The AI just picked its own defaults for all of that — mostly FastAPI's out-of-the-box validation behavior — instead of the exact rules the assignment wanted.
+## Security
 
-**One rematch:**
-Adding "reject empty-string titles with 400, return 204 with no body on delete, and include GET / and GET /health" to my prompt would fix most of these gaps in one pass.
+Secrets are kept outside the source code.
 
-## AI vs me (Stage 6, Week 3 — containerizing the stack)
+* `.env` is ignored by Git.
+* `.env.example` contains only placeholder values.
+* Supabase authentication is handled by Supabase Auth.
+* JWTs are verified through Supabase before protected routes execute.
+* Protected routes reject missing or invalid credentials.
+* Database queries use parameterized SQL queries.
 
-**My prompt:**
-> So for this assignment I used Docker Desktop, Postgres as the database. On startup it creates a table of 4 rows and its status is healthy.
+Never commit real Supabase credentials or access tokens to GitHub.
 
-**What the AI did better:**
-Nothing, really — the prompt was thin enough that the AI had to guess at nearly everything, and most of its guesses skipped the exact parts of this assignment that mattered (secrets, persistence, startup ordering).
+## GitHub
 
-**What it got wrong or ignored:**
-- Hardcoded the database password directly in the code instead of reading it from `.env` — exactly the secret-leak risk this assignment exists to prevent
-- No volume on the `db` service — if the container is ever removed, all data is gone, which defeats the entire point of containerizing storage
-- No healthcheck or `depends_on: condition: service_healthy` — this hits the exact startup race condition I ran into myself: the app can try to connect before Postgres is actually ready and crash
-- No "only seed if empty" check — the 4 example rows would duplicate on every single restart
-- `GET /tasks/{id}` builds its SQL with an f-string instead of a parameterized placeholder — a real injection risk
-- `DELETE` returns `200` with a message body instead of `204` empty, breaking the status-code contract carried over from Assignments 1 and 2
+The project is publicly available on GitHub:
 
-**What my prompt forgot to specify — and what the AI silently decided:**
-I never mentioned `.env`, secrets, volumes, a healthcheck, the seed-once rule, or parameterized queries at all — the AI filled in every one of those gaps with the least-safe option each time. My prompt also just said "creates a table of 4 rows," so it correctly saw 4 rows, but couldn't have known that count is meant to hold steady across restarts, not grow.
+https://github.com/Talha2503/Backend-AI-Assignments
 
-**One rematch:**
-A better prompt would specify: "Containerize this FastAPI + Postgres CRUD API with Docker Compose. Read the database password from a `.env` file, never hardcode it. Use a named volume so data survives `docker compose down`. Add a Postgres healthcheck and make the app service wait for it. Seed 3 example tasks only if the table is empty. Keep all queries parameterized, and keep the exact same endpoints and status codes (400/404/204) as before." That single paragraph would have caught every issue above.
+The repository contains the project source code and the completed authentication stages.
+
+## Project stages
+
+| Stage   | Description                          | Status      |
+| ------- | ------------------------------------ | ----------- |
+| Stage 1 | Signup and Login                     | Complete    |
+| Stage 2 | Public and Protected Routes          | Complete    |
+| Stage 3 | Token Verification                   | Complete    |
+| Stage 4 | Authentication Middleware and Logout | Complete    |
+| Stage 5 | Swagger UI Bearer Authentication     | Complete    |
+| Stage 6 | GitHub Publication and README        | In progress |
+| Stage 7 | AI vs Me — Bonus                     | Optional    |
+
+## Earlier storage stages
+
+| Stage           | Storage               | Persistence |
+| --------------- | --------------------- | ----------- |
+| Week 2          | Python in-memory list | No          |
+| Week 3          | SQLite                | Yes         |
+| Current project | PostgreSQL in Docker  | Yes         |
+
+The API contract remains consistent while the underlying storage layer evolves.
+
+## License
+
+This project was created for educational purposes as part of the FlyRank Backend AI Engineering internship.
