@@ -1,5 +1,7 @@
-import os
+import json
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
@@ -7,149 +9,379 @@ from bs4 import BeautifulSoup
 
 
 BASE_URL = "https://books.toscrape.com/"
-PAGE_1_URL = urljoin(BASE_URL, "catalogue/page-1.html")
+CATALOGUE_URL = "https://books.toscrape.com/catalogue/page-{}.html"
 
-CACHE_DIR = "cache"
-CATALOGUE_CACHE_DIR = os.path.join(CACHE_DIR, "catalogue")
+CACHE_DIR = Path("cache")
+CATALOGUE_CACHE_DIR = CACHE_DIR / "catalogue"
+DETAIL_CACHE_DIR = CACHE_DIR / "details"
 
-USER_AGENT = "FlyRankInternshipA9/1.0 (+https://github.com/Talha2503/Backend-AI-Assignments)"
+USER_AGENT = (
+    "FlyRankInternshipA9/1.0 "
+    "(+https://github.com/Talha2503/Backend-AI-Assignments)"
+)
+
 TIMEOUT = 10
 DELAY = 0.5
 
+session = requests.Session()
+session.headers.update({
+    "User-Agent": USER_AGENT
+})
 
-def ensure_directories():
-    os.makedirs(CATALOGUE_CACHE_DIR, exist_ok=True)
 
+def fetch_page(url, cache_file):
+    if cache_file.exists():
+        html = cache_file.read_text(
+            encoding="utf-8"
+        )
 
-def fetch_or_cache(url, cache_path):
-    if os.path.exists(cache_path):
-        with open(cache_path, "r", encoding="utf-8") as file:
-            content = file.read()
+        print(f"CACHE HIT: {cache_file}")
+        print(
+            f"response_size="
+            f"{len(html.encode('utf-8'))} bytes"
+        )
 
-        print(f"CACHE HIT: {cache_path}")
-        print(f"response_size={len(content.encode('utf-8'))} bytes")
-        return content
+        return html
 
     print(f"FETCH: {url}")
 
-    headers = {
-        "User-Agent": USER_AGENT
-    }
-
-    response = requests.get(
+    response = session.get(
         url,
-        headers=headers,
         timeout=TIMEOUT
+    )
+
+    print(
+        f"FETCH SUCCESS: status={response.status_code}"
     )
 
     if response.status_code != 200:
         raise RuntimeError(
-            f"Failed to fetch {url}: HTTP {response.status_code}"
+            f"Failed to fetch {url}: "
+            f"HTTP {response.status_code}"
         )
 
-    content = response.text
+    response.encoding = response.apparent_encoding
+    html = response.text
 
-    print(f"FETCH SUCCESS: status={response.status_code}")
-    print(f"response_size={len(response.content)} bytes")
-
-    with open(cache_path, "w", encoding="utf-8") as file:
-        file.write(content)
-
-    print(f"cached_to={cache_path}")
-
-    time.sleep(DELAY)
-
-    return content
-
-
-def get_catalogue_page_url(page_number):
-    return urljoin(
-        BASE_URL,
-        f"catalogue/page-{page_number}.html"
+    cache_file.parent.mkdir(
+        parents=True,
+        exist_ok=True
     )
 
-
-def extract_book_links(html, page_url):
-    soup = BeautifulSoup(html, "html.parser")
-
-    book_links = []
-
-    for article in soup.select("article.product_pod"):
-        link = article.select_one("h3 a")
-
-        if link and link.get("href"):
-            absolute_url = urljoin(
-                page_url,
-                link["href"]
-            )
-
-            book_links.append(absolute_url)
-
-    return book_links
-
-
-def find_next_page(html, current_url):
-    soup = BeautifulSoup(html, "html.parser")
-
-    next_link = soup.select_one("li.next a")
-
-    if not next_link or not next_link.get("href"):
-        return None
-
-    return urljoin(
-        current_url,
-        next_link["href"]
+    cache_file.write_text(
+        html,
+        encoding="utf-8"
     )
 
+    print(
+        f"response_size="
+        f"{len(html.encode('utf-8'))} bytes"
+    )
 
-def main():
-    ensure_directories()
+    print(f"cached_to={cache_file}")
 
-    all_book_urls = []
-    current_url = PAGE_1_URL
+    return html
+
+
+def discover_book_urls():
+    book_urls = []
+    catalogue_pages = 0
 
     for page_number in range(1, 4):
-        cache_path = os.path.join(
-            CATALOGUE_CACHE_DIR,
-            f"catalogue-page-{page_number}.html"
+        page_url = CATALOGUE_URL.format(
+            page_number
         )
 
-        html = fetch_or_cache(
-            current_url,
-            cache_path
+        cache_file = (
+            CATALOGUE_CACHE_DIR
+            / f"catalogue-page-{page_number}.html"
         )
 
-        book_links = extract_book_links(
+        html = fetch_page(
+            page_url,
+            cache_file
+        )
+
+        soup = BeautifulSoup(
             html,
-            current_url
+            "html.parser"
         )
 
-        all_book_urls.extend(book_links)
+        books = soup.select(
+            "article.product_pod"
+        )
 
         print(
             f"page={page_number} "
-            f"books_found={len(book_links)}"
+            f"books_found={len(books)}"
         )
 
-        if page_number < 3:
-            next_url = find_next_page(
-                html,
-                current_url
+        for book in books:
+            link = book.select_one(
+                "h3 a"
             )
 
-            if not next_url:
-                raise RuntimeError(
-                    f"Could not find next page after {current_url}"
+            if link and link.get("href"):
+                absolute_url = urljoin(
+                    page_url,
+                    link["href"]
                 )
 
-            current_url = next_url
+                book_urls.append(
+                    (
+                        absolute_url,
+                        page_url
+                    )
+                )
 
-    unique_urls = list(dict.fromkeys(all_book_urls))
+        catalogue_pages += 1
+
+        if page_number < 3:
+            time.sleep(DELAY)
+
+    unique = {}
+
+    for product_url, source_page in book_urls:
+        if product_url not in unique:
+            unique[product_url] = source_page
 
     print()
-    print(f"catalogue_pages=3")
-    print(f"discovered={len(all_book_urls)}")
-    print(f"unique_urls={len(unique_urls)}")
+    print(
+        f"catalogue_pages={catalogue_pages}"
+    )
+    print(
+        f"discovered={len(book_urls)}"
+    )
+    print(
+        f"unique_urls={len(unique)}"
+    )
+    print()
+
+    return unique
+
+
+def extract_rating(soup):
+    rating_element = soup.select_one(
+        "p.star-rating"
+    )
+
+    if not rating_element:
+        return None
+
+    classes = rating_element.get(
+        "class",
+        []
+    )
+
+    for rating in (
+        "One",
+        "Two",
+        "Three",
+        "Four",
+        "Five"
+    ):
+        if rating in classes:
+            return rating
+
+    return None
+
+
+def extract_description(soup):
+    description = soup.select_one(
+        "#product_description + p"
+    )
+
+    if not description:
+        return None
+
+    text = description.get_text(
+        " ",
+        strip=True
+    )
+
+    return text if text else None
+
+
+def extract_book(
+    product_url,
+    source_page,
+    index
+):
+    filename = f"book-{index:02d}.html"
+
+    cache_file = (
+        DETAIL_CACHE_DIR / filename
+    )
+
+    was_cached = cache_file.exists()
+
+    html = fetch_page(
+        product_url,
+        cache_file
+    )
+
+    if not was_cached:
+        time.sleep(DELAY)
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    title_element = soup.select_one(
+        "div.product_main h1"
+    )
+
+    price_element = soup.select_one(
+        "div.product_main .price_color"
+    )
+
+    availability_element = soup.select_one(
+        "div.product_main .availability"
+    )
+
+    title = (
+        title_element.get_text(
+            strip=True
+        )
+        if title_element
+        else None
+    )
+
+    price_text = (
+        price_element.get_text(
+            strip=True
+        )
+        if price_element
+        else None
+    )
+
+    availability_text = (
+        availability_element.get_text(
+            " ",
+            strip=True
+        )
+        if availability_element
+        else None
+    )
+
+    rating_text = extract_rating(
+        soup
+    )
+
+    description = extract_description(
+        soup
+    )
+
+    fetched_at = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    record = {
+        "title": title,
+        "product_url": product_url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": fetched_at
+    }
+
+    return record
+
+
+def main():
+    unique_books = discover_book_urls()
+
+    records = []
+    failures = []
+
+    print(
+        "Extracting book details..."
+    )
+    print()
+
+    for index, (
+        product_url,
+        source_page
+    ) in enumerate(
+        unique_books.items(),
+        start=1
+    ):
+        try:
+            record = extract_book(
+                product_url,
+                source_page,
+                index
+            )
+
+            records.append(record)
+
+            print(
+                f"book={index}/60 "
+                f"title={record['title']}"
+            )
+
+        except Exception as error:
+            failures.append({
+                "product_url": product_url,
+                "error": str(error)
+            })
+
+            print(
+                f"FAILED: {product_url}"
+            )
+
+            print(
+                f"error={error}"
+            )
+
+    output_file = (
+        Path("output")
+        / "raw-books.json"
+    )
+
+    output_file.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    output_file.write_text(
+        json.dumps(
+            records,
+            indent=2,
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
+    print()
+    print(
+        f"detail_pages={len(records)}"
+    )
+
+    print(
+        f"failed_pages={len(failures)}"
+    )
+
+    print(
+        f"saved_to={output_file}"
+    )
+
+    if records:
+        print()
+        print(
+            "SAMPLE RAW RECORD:"
+        )
+
+        print(
+            json.dumps(
+                records[0],
+                indent=2,
+                ensure_ascii=False
+            )
+        )
 
 
 if __name__ == "__main__":
