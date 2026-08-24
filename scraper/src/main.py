@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,11 @@ CATALOGUE_URL = "https://books.toscrape.com/catalogue/page-{}.html"
 CACHE_DIR = Path("cache")
 CATALOGUE_CACHE_DIR = CACHE_DIR / "catalogue"
 DETAIL_CACHE_DIR = CACHE_DIR / "details"
+
+OUTPUT_DIR = Path("output")
+RAW_OUTPUT_FILE = OUTPUT_DIR / "raw-books.json"
+NORMALIZED_OUTPUT_FILE = OUTPUT_DIR / "books.json"
+ERROR_OUTPUT_FILE = OUTPUT_DIR / "errors.json"
 
 USER_AGENT = (
     "FlyRankInternshipA9/1.0 "
@@ -60,7 +66,9 @@ def fetch_page(url, cache_file):
             f"HTTP {response.status_code}"
         )
 
-    response.encoding = response.apparent_encoding
+    # Books to Scrape serves UTF-8 HTML.
+    # Use UTF-8 explicitly to avoid values such as Â£.
+    response.encoding = "utf-8"
     html = response.text
 
     cache_file.parent.mkdir(
@@ -291,6 +299,238 @@ def extract_book(
     return record
 
 
+def normalize_price(price_text):
+    if not isinstance(price_text, str):
+        return None
+
+    # Handle both the correct pound sign and the
+    # previously corrupted Â£ representation.
+    cleaned = (
+        price_text
+        .replace("Â£", "")
+        .replace("£", "")
+        .strip()
+    )
+
+    match = re.search(
+        r"\d+(?:\.\d+)?",
+        cleaned
+    )
+
+    if not match:
+        return None
+
+    return float(match.group())
+
+
+def validate_record(record):
+    errors = []
+
+    required_fields = [
+        "title",
+        "product_url",
+        "price_text",
+        "availability_text",
+        "rating_text",
+        "source_page",
+        "fetched_at"
+    ]
+
+    for field in required_fields:
+        if field not in record:
+            errors.append(
+                f"Missing required field: {field}"
+            )
+
+    if errors:
+        return errors
+
+    if not isinstance(record["title"], str):
+        errors.append(
+            "title must be a string"
+        )
+    elif not record["title"].strip():
+        errors.append(
+            "title must not be empty"
+        )
+
+    if not isinstance(record["product_url"], str):
+        errors.append(
+            "product_url must be a string"
+        )
+    elif not record["product_url"].startswith(
+        "https://"
+    ):
+        errors.append(
+            "product_url must start with https://"
+        )
+
+    if not isinstance(record["price_text"], str):
+        errors.append(
+            "price_text must be a string"
+        )
+
+    if not isinstance(
+        record["price_gbp"],
+        (int, float)
+    ):
+        errors.append(
+            "price_gbp must be a number"
+        )
+
+    if not isinstance(
+        record["availability_text"],
+        str
+    ):
+        errors.append(
+            "availability_text must be a string"
+        )
+
+    if record["rating_text"] is not None:
+        if not isinstance(
+            record["rating_text"],
+            str
+        ):
+            errors.append(
+                "rating_text must be a string or null"
+            )
+
+    if record["description"] is not None:
+        if not isinstance(
+            record["description"],
+            str
+        ):
+            errors.append(
+                "description must be a string or null"
+            )
+
+    if not isinstance(
+        record["source_page"],
+        str
+    ):
+        errors.append(
+            "source_page must be a string"
+        )
+    elif not record["source_page"].startswith(
+        "https://"
+    ):
+        errors.append(
+            "source_page must start with https://"
+        )
+
+    if not isinstance(
+        record["fetched_at"],
+        str
+    ):
+        errors.append(
+            "fetched_at must be a string"
+        )
+
+    return errors
+
+
+def normalize_record(raw_record):
+    price_gbp = normalize_price(
+        raw_record.get("price_text")
+    )
+
+    normalized_record = {
+        "title": raw_record.get("title"),
+        "product_url": raw_record.get(
+            "product_url"
+        ),
+        "price_text": raw_record.get(
+            "price_text"
+        ),
+        "price_gbp": price_gbp,
+        "availability_text": raw_record.get(
+            "availability_text"
+        ),
+        "rating_text": raw_record.get(
+            "rating_text"
+        ),
+        "description": raw_record.get(
+            "description"
+        ),
+        "source_page": raw_record.get(
+            "source_page"
+        ),
+        "fetched_at": raw_record.get(
+            "fetched_at"
+        )
+    }
+
+    return normalized_record
+
+
+def normalize_records(raw_records):
+    valid_records = []
+    invalid_records = []
+
+    seen_urls = set()
+
+    for index, raw_record in enumerate(
+        raw_records,
+        start=1
+    ):
+        normalized_record = normalize_record(
+            raw_record
+        )
+
+        product_url = normalized_record.get(
+            "product_url"
+        )
+
+        if product_url in seen_urls:
+            invalid_records.append({
+                "product_url": product_url,
+                "errors": [
+                    "Duplicate product_url"
+                ]
+            })
+
+            continue
+
+        errors = validate_record(
+            normalized_record
+        )
+
+        if errors:
+            invalid_records.append({
+                "product_url": product_url,
+                "errors": errors,
+                "record": normalized_record
+            })
+
+            continue
+
+        seen_urls.add(product_url)
+        valid_records.append(
+            normalized_record
+        )
+
+    return (
+        valid_records,
+        invalid_records
+    )
+
+
+def save_json(file_path, data):
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    file_path.write_text(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
+
 def main():
     unique_books = discover_book_urls()
 
@@ -319,7 +559,7 @@ def main():
             records.append(record)
 
             print(
-                f"book={index}/60 "
+                f"book={index}/{len(unique_books)} "
                 f"title={record['title']}"
             )
 
@@ -337,26 +577,30 @@ def main():
                 f"error={error}"
             )
 
-    output_file = (
-        Path("output")
-        / "raw-books.json"
-    )
-
-    output_file.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    output_file.write_text(
-        json.dumps(
-            records,
-            indent=2,
-            ensure_ascii=False
-        ),
-        encoding="utf-8"
+    save_json(
+        RAW_OUTPUT_FILE,
+        records
     )
 
     print()
+    print(
+        "Normalizing extracted records..."
+    )
+
+    valid_records, invalid_records = (
+        normalize_records(records)
+    )
+
+    save_json(
+        NORMALIZED_OUTPUT_FILE,
+        valid_records
+    )
+
+    save_json(
+        ERROR_OUTPUT_FILE,
+        invalid_records
+    )
+
     print(
         f"detail_pages={len(records)}"
     )
@@ -366,18 +610,34 @@ def main():
     )
 
     print(
-        f"saved_to={output_file}"
+        f"valid_records={len(valid_records)}"
     )
 
-    if records:
+    print(
+        f"invalid_records={len(invalid_records)}"
+    )
+
+    print(
+        f"raw_saved_to={RAW_OUTPUT_FILE}"
+    )
+
+    print(
+        f"normalized_saved_to={NORMALIZED_OUTPUT_FILE}"
+    )
+
+    print(
+        f"errors_saved_to={ERROR_OUTPUT_FILE}"
+    )
+
+    if valid_records:
         print()
         print(
-            "SAMPLE RAW RECORD:"
+            "SAMPLE NORMALIZED RECORD:"
         )
 
         print(
             json.dumps(
-                records[0],
+                valid_records[0],
                 indent=2,
                 ensure_ascii=False
             )
