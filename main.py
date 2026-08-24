@@ -1,16 +1,41 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from database import init_db, get_connection
+from supabase_client import supabase
 
 
 class TaskCreate(BaseModel):
     title: str | None = None
     done: bool = False
 
+class SignupRequest(BaseModel):
+    email: str
+    password: str
 
 app = FastAPI(title="Task API", version="1.0")
 init_db()
 
+@app.post("/auth/signup", status_code=201, summary="Sign up", description="Creates a new user account through Supabase Auth.")
+def signup(payload: SignupRequest):
+    if not payload.email.strip() or not payload.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Email and password are required"
+        )
+
+    try:
+        response = supabase.auth.sign_up({
+            "email": payload.email,
+            "password": payload.password,
+        })
+
+        return response.user
+
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to create account"
+        )
 
 @app.get("/", summary="API info", description="Returns basic info about this API and its endpoints.")
 def root():
