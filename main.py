@@ -12,6 +12,10 @@ class SignupRequest(BaseModel):
     email: str
     password: str
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 app = FastAPI(title="Task API", version="1.0")
 init_db()
 
@@ -35,6 +39,32 @@ def signup(payload: SignupRequest):
         raise HTTPException(
             status_code=400,
             detail="Unable to create account"
+        )
+
+@app.post("/auth/login", summary="Log in", description="Authenticates an existing user through Supabase Auth.")
+def login(payload: LoginRequest):
+    if not payload.email.strip() or not payload.password:
+        raise HTTPException(
+            status_code=400,
+            detail="Email and password are required"
+        )
+
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": payload.email,
+            "password": payload.password,
+        })
+
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+            "user": response.user,
+        }
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
         )
 
 @app.get("/", summary="API info", description="Returns basic info about this API and its endpoints.")
