@@ -39,6 +39,7 @@ def get_current_user(
 
     except HTTPException:
         raise
+
     except Exception:
         raise HTTPException(
             status_code=401,
@@ -47,6 +48,7 @@ def get_current_user(
 
 
 app = FastAPI(title="Task API", version="1.0")
+
 init_db()
 
 
@@ -109,6 +111,24 @@ def login(payload: LoginRequest):
         )
 
 
+@app.post(
+    "/auth/logout",
+    status_code=204,
+    summary="Log out",
+    description="Logs out the authenticated user."
+)
+def logout(current_user=Depends(get_current_user)):
+    try:
+        supabase.auth.sign_out()
+        return None
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Unable to log out"
+        )
+
+
 @app.get(
     "/",
     summary="API info",
@@ -118,17 +138,62 @@ def root():
     return {
         "name": "Task API",
         "version": "1.0",
-        "endpoints": ["/tasks"],
+        "endpoints": [
+            "/auth/signup",
+            "/auth/login",
+            "/auth/logout",
+            "/public/info",
+            "/protected/profile",
+            "/protected/dashboard",
+            "/tasks"
+        ],
     }
 
 
 @app.get(
     "/health",
     summary="Health check",
-    description="Confirms the server is alive. Used by monitoring tools."
+    description="Confirms the server is alive."
 )
 def health():
     return {"status": "ok"}
+
+
+@app.get(
+    "/public/info",
+    summary="Public information",
+    description="Public endpoint that does not require authentication."
+)
+def public_info():
+    return {
+        "message": "Welcome stranger! This info is public."
+    }
+
+
+@app.get(
+    "/protected/profile",
+    summary="Protected profile",
+    description="Returns information about the authenticated user."
+)
+def protected_profile(current_user=Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "created_at": current_user.created_at,
+    }
+
+
+@app.get(
+    "/protected/dashboard",
+    summary="Protected dashboard",
+    description="Protected endpoint demonstrating reusable authentication."
+)
+def protected_dashboard(current_user=Depends(get_current_user)):
+    return {
+        "message": "Welcome to your protected dashboard!",
+        "user_id": current_user.id,
+        "email": current_user.email,
+    }
 
 
 @app.get(
@@ -139,13 +204,19 @@ def health():
 def list_tasks(current_user=Depends(get_current_user)):
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute("SELECT id, title, done FROM tasks")
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
 
     return [
-        {"id": r[0], "title": r[1], "done": r[2]}
+        {
+            "id": r[0],
+            "title": r[1],
+            "done": r[2]
+        }
         for r in rows
     ]
 
@@ -153,7 +224,7 @@ def list_tasks(current_user=Depends(get_current_user)):
 @app.get(
     "/tasks/{task_id}",
     summary="Get one task",
-    description="Returns a single task by id, or 404 if it doesn't exist."
+    description="Returns a single task by id."
 )
 def get_task(
     task_id: int,
@@ -161,11 +232,14 @@ def get_task(
 ):
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         "SELECT id, title, done FROM tasks WHERE id = %s",
         (task_id,)
     )
+
     row = cur.fetchone()
+
     cur.close()
     conn.close()
 
@@ -186,7 +260,7 @@ def get_task(
     "/tasks",
     status_code=201,
     summary="Create a task",
-    description="Creates a new task. Title is required and cannot be empty."
+    description="Creates a new task."
 )
 def create_task(
     payload: TaskCreate,
@@ -200,12 +274,16 @@ def create_task(
 
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         "INSERT INTO tasks (title, done) VALUES (%s, %s) RETURNING id",
         (payload.title, payload.done),
     )
+
     new_id = cur.fetchone()[0]
+
     conn.commit()
+
     cur.close()
     conn.close()
 
@@ -219,7 +297,7 @@ def create_task(
 @app.put(
     "/tasks/{task_id}",
     summary="Update a task",
-    description="Replaces a task's title and done status. 404 if the task doesn't exist."
+    description="Updates an existing task."
 )
 def update_task(
     task_id: int,
@@ -234,16 +312,20 @@ def update_task(
 
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         "UPDATE tasks SET title = %s, done = %s WHERE id = %s",
         (payload.title, payload.done, task_id),
     )
+
     updated = cur.rowcount
+
     conn.commit()
 
     if updated == 0:
         cur.close()
         conn.close()
+
         raise HTTPException(
             status_code=404,
             detail=f"Task {task_id} not found"
@@ -253,7 +335,9 @@ def update_task(
         "SELECT id, title, done FROM tasks WHERE id = %s",
         (task_id,)
     )
+
     row = cur.fetchone()
+
     cur.close()
     conn.close()
 
@@ -268,7 +352,7 @@ def update_task(
     "/tasks/{task_id}",
     status_code=204,
     summary="Delete a task",
-    description="Removes a task permanently. 404 if the task doesn't exist."
+    description="Removes a task permanently."
 )
 def delete_task(
     task_id: int,
@@ -276,12 +360,16 @@ def delete_task(
 ):
     conn = get_connection()
     cur = conn.cursor()
+
     cur.execute(
         "DELETE FROM tasks WHERE id = %s",
         (task_id,)
     )
+
     deleted = cur.rowcount
+
     conn.commit()
+
     cur.close()
     conn.close()
 
@@ -291,3 +379,4 @@ def delete_task(
             detail=f"Task {task_id} not found"
         )
 
+    return None
