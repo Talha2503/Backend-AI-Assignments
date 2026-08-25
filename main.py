@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from database import init_db, get_connection
 from supabase_client import supabase
+
 from src.llm.schema import SupportRequest, SupportClassification
 from src.llm.client import classify_with_llm, repair_with_llm
 from src.llm.parser import parse_and_validate
@@ -71,12 +72,16 @@ async def validation_exception_handler(
 
             return JSONResponse(
                 status_code=400,
-                content={"message": f"Invalid field: {field}"}
+                content={
+                    "message": f"Invalid field: {field}"
+                }
             )
 
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()}
+        content={
+            "detail": exc.errors()
+        }
     )
 
 
@@ -421,42 +426,91 @@ def delete_task(
     description="Classifies a support message using an LLM."
 )
 async def classify_support(payload: SupportRequest):
-    if os.getenv("LLM_STUB") == "1":
-        return SupportClassification(
-            category="other",
-            urgency="normal",
-            confidence=0.5,
-            reason="The support message could not be classified yet."
+
+    # Production kill switch.
+    if os.getenv("LLM_ENABLED", "true").lower() != "true":
+        return {
+            "category": "other",
+            "urgency": "normal",
+            "confidence": 0.5,
+            "reason": "LLM classification is currently disabled."
+        }
+
+    # First model call.
+    try:
+        raw_output = classify_with_llm(payload.text)
+
+    except Exception as exc:
+        error_name = type(exc).__name__
+
+        if error_name in {
+            "APITimeoutError",
+            "APIConnectionError",
+        }:
+            raise HTTPException(
+                status_code=504,
+                detail="LLM provider request timed out or could not be reached."
+            )
+
+        if hasattr(exc, "status_code"):
+            status_code = exc.status_code
+
+            if status_code == 401:
+                raise HTTPException(
+                    status_code=401,
+                    detail="LLM provider authentication failed."
+                )
+
+            if status_code == 403:
+                raise HTTPException(
+                    status_code=403,
+                    detail="LLM provider rejected the request."
+                )
+
+        raise HTTPException(
+            status_code=502,
+            detail="LLM provider request failed."
         )
 
-    prompt_version = "support-v1"
-
-    # First model attempt.
-    raw_output = classify_with_llm(payload.text)
-
+    # Parse and validate the first response.
     try:
-        return parse_and_validate(raw_output)
+        result = parse_and_validate(raw_output)
+        return result
 
     except Exception as first_error:
-        # One repair attempt only.
-        repaired_output = repair_with_llm(
-            payload.text,
-            raw_output,
-            str(first_error),
-        )
+        validation_error = str(first_error)
 
+        # Exactly one repair attempt.
         try:
-            return parse_and_validate(repaired_output)
+            repaired_output = repair_with_llm(
+                text=payload.text,
+                broken_output=raw_output,
+                validation_error=validation_error,
+            )
+
+            repaired_result = parse_and_validate(
+                repaired_output
+            )
+
+            return repaired_result
 
         except Exception as second_error:
+
+            # Quarantine the failed model response.
             quarantine(
                 input_text=payload.text,
-                raw_output=repaired_output,
-                error=str(second_error),
-                prompt_version=prompt_version,
+                raw_output=raw_output,
+                error=(
+                    f"Initial error: {validation_error}; "
+                    f"Repair error: {second_error}"
+                ),
+                prompt_version="support-v1",
             )
 
             raise HTTPException(
                 status_code=422,
-                detail="The model returned an invalid response after one repair attempt."
+                detail=(
+                    "LLM response could not be validated "
+                    "after one repair attempt."
+                )
             )
