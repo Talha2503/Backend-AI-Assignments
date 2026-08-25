@@ -317,6 +317,35 @@ curl -X POST http://127.0.0.1:8000/support/classify -H "Content-Type: applicatio
 
 curl -X POST http://127.0.0.1:8000/support/classify -H "Content-Type: application/json" -d "{}"
 
+## Stage 3 — Trustworthy LLM Output
+
+The support classification endpoint treats model output as untrusted external data.
+
+The response pipeline is:
+
+1. Call the LLM.
+2. Extract the JSON object from the model response.
+3. Parse the JSON.
+4. Validate it against the `SupportClassification` Pydantic schema.
+5. If parsing or validation fails, make exactly one repair attempt.
+6. Validate the repaired response again.
+7. If the repaired response is still invalid, return HTTP 422 and quarantine the failed response in `logs/quarantine.jsonl`.
+8. Raw model output is never returned directly to the API caller.
+
+The endpoint therefore always returns either a schema-valid classification or a clear error response.
+
+### Stage 3 observations
+
+Three real support messages were tested against the LLM:
+
+- Subscription charged twice → `billing`
+- App crashes during profile picture upload → `bug`
+- Request for dashboard dark mode → `feature`
+
+The model returned JSON-shaped responses for all three. The parser also successfully handled JSON wrapped in a Markdown code fence, and Pydantic rejected an invalid category such as `random`.
+
+The repair path is limited to one retry to avoid repeated model calls and uncontrolled costs.
+
 ### LICENSE
 
 This project was created for educational purposes as part of the FlyRank Backend AI Engineering internship.

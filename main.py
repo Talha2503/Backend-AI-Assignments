@@ -5,10 +5,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+
 from database import init_db, get_connection
 from supabase_client import supabase
 from src.llm.schema import SupportRequest, SupportClassification
-from src.llm.client import classify_with_llm
+from src.llm.client import classify_with_llm, repair_with_llm
+from src.llm.parser import parse_and_validate
+from src.llm.quarantine import quarantine
+
 
 security = HTTPBearer()
 
@@ -54,12 +58,17 @@ def get_current_user(
 
 app = FastAPI(title="Task API", version="1.0")
 
+
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+):
     if request.url.path == "/support/classify":
         for error in exc.errors():
             location = error.get("loc", ())
             field = location[-1] if location else "request"
+
             return JSONResponse(
                 status_code=400,
                 content={"message": f"Invalid field: {field}"}
@@ -69,6 +78,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         status_code=422,
         content={"detail": exc.errors()}
     )
+
 
 init_db()
 
@@ -166,7 +176,8 @@ def root():
             "/public/info",
             "/protected/profile",
             "/protected/dashboard",
-            "/tasks"
+            "/tasks",
+            "/support/classify"
         ],
     }
 
@@ -402,18 +413,50 @@ def delete_task(
 
     return None
 
+
 @app.post(
     "/support/classify",
+    response_model=SupportClassification,
     summary="Classify a support message",
     description="Classifies a support message using an LLM."
 )
 async def classify_support(payload: SupportRequest):
     if os.getenv("LLM_STUB") == "1":
-        return {
-            "category": "other",
-            "urgency": "normal",
-            "confidence": 0.5,
-            "reason": "The support message could not be classified yet."
-        }
+        return SupportClassification(
+            category="other",
+            urgency="normal",
+            confidence=0.5,
+            reason="The support message could not be classified yet."
+        )
 
-    return classify_with_llm(payload.text)
+    prompt_version = "support-v1"
+
+    # First model attempt.
+    raw_output = classify_with_llm(payload.text)
+
+    try:
+        return parse_and_validate(raw_output)
+
+    except Exception as first_error:
+        # One repair attempt only.
+        repaired_output = repair_with_llm(
+            payload.text,
+            raw_output,
+            str(first_error),
+        )
+
+        try:
+            return parse_and_validate(repaired_output)
+
+        except Exception as second_error:
+            quarantine(
+                input_text=payload.text,
+                raw_output=repaired_output,
+                error=str(second_error),
+                prompt_version=prompt_version,
+            )
+
+            raise HTTPException(
+                status_code=422,
+                detail="The model returned an invalid response after one repair attempt."
+            )
