@@ -1,8 +1,10 @@
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -13,6 +15,15 @@ from src.llm.schema import SupportRequest, SupportClassification
 from src.llm.client import classify_with_llm, repair_with_llm
 from src.llm.parser import parse_and_validate
 from src.llm.quarantine import quarantine
+
+from report_data import getReportData
+from report_renderer import generate_pdf
+from report_db import (
+    init_report_db,
+    create_report,
+    update_report_path,
+    get_report,
+)
 
 
 security = HTTPBearer()
@@ -85,7 +96,11 @@ async def validation_exception_handler(
     )
 
 
+# Initialize the existing PostgreSQL task database.
 init_db()
+
+# Initialize the SQLite reporting database.
+init_report_db()
 
 
 @app.post(
@@ -182,7 +197,10 @@ def root():
             "/protected/profile",
             "/protected/dashboard",
             "/tasks",
-            "/support/classify"
+            "/support/classify",
+            "/reports",
+            "/reports/{id}",
+            "/reports/{id}/file",
         ],
     }
 
@@ -418,6 +436,122 @@ def delete_task(
 
     return None
 
+
+# ============================================================
+# REPORT ENDPOINTS
+# ============================================================
+
+@app.post(
+    "/reports",
+    status_code=201,
+    summary="Generate a report",
+    description=(
+        "Runs the complete reporting pipeline: query the SQLite "
+        "database, render the report as HTML, generate a PDF with "
+        "Playwright, store the PDF, and create a report record."
+    )
+)
+def create_report_endpoint():
+    # 1. Query and aggregate the report data.
+    report_data = getReportData()
+
+    # 2. Create the report record first so we have its ID.
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    report_id = create_report(created_at)
+
+    # 3. Create the reports directory.
+    reports_dir = Path("reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    # 4. Generate a unique PDF path based on the report ID.
+    file_path = reports_dir / f"{report_id}.pdf"
+
+    try:
+        # 5. Render HTML and generate the PDF.
+        generate_pdf(
+            report_data,
+            str(file_path)
+        )
+
+    except Exception as exc:
+        # Remove the bookkeeping row if PDF generation fails.
+        from report_db import delete_report
+
+        delete_report(report_id)
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate report: {type(exc).__name__}"
+        )
+
+    # 6. Store the generated PDF path.
+    update_report_path(
+        report_id,
+        str(file_path)
+    )
+
+    # 7. Return the report ID and download link.
+    return {
+        "id": report_id,
+        "file": f"/reports/{report_id}/file",
+    }
+
+
+@app.get(
+    "/reports/{report_id}",
+    summary="Get report metadata",
+    description="Returns metadata and the download link for a generated report."
+)
+def get_report_endpoint(report_id: int):
+    report = get_report(report_id)
+
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Report not found"
+        )
+
+    return {
+        "id": report["id"],
+        "path": report["path"],
+        "created_at": report["created_at"],
+        "file": f"/reports/{report_id}/file",
+    }
+
+
+@app.get(
+    "/reports/{report_id}/file",
+    summary="Download report PDF",
+    description="Downloads the generated PDF report."
+)
+def get_report_file(report_id: int):
+    report = get_report(report_id)
+
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Report not found"
+        )
+
+    file_path = Path(report["path"])
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Report file not found"
+        )
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=f"report-{report_id}.pdf",
+    )
+
+
+# ============================================================
+# LLM SUPPORT CLASSIFICATION
+# ============================================================
 
 @app.post(
     "/support/classify",
