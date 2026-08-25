@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from database import init_db, get_connection
 from supabase_client import supabase
 from src.llm.schema import SupportRequest, SupportClassification
-
+from src.llm.client import classify_with_llm
 
 security = HTTPBearer()
 
@@ -404,9 +404,8 @@ def delete_task(
 
 @app.post(
     "/support/classify",
-    response_model=SupportClassification,
     summary="Classify a support message",
-    description="Classifies a support message using a stub until the LLM integration is added."
+    description="Classifies a support message using an LLM."
 )
 async def classify_support(payload: SupportRequest):
     if os.getenv("LLM_STUB") == "1":
@@ -417,7 +416,4 @@ async def classify_support(payload: SupportRequest):
             "reason": "The support message could not be classified yet."
         }
 
-    raise HTTPException(
-        status_code=503,
-        detail="LLM integration is not enabled yet"
-    )
+    return classify_with_llm(payload.text)

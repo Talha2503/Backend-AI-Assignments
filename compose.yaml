@@ -4,10 +4,14 @@ services:
     ports: ["8000:8000"]
     environment:
       DATABASE_URL: postgres://postgres:dev@db:5432/tasks
-      LLM_STUB: ${LLM_STUB}
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_STUB: ${LLM_STUB:-}
     depends_on:
       db:
         condition: service_healthy
+
   db:
     image: postgres
     environment:
