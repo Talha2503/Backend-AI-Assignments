@@ -304,6 +304,10 @@ The repository contains the project source code and the completed authentication
 
 The API contract remains consistent while the underlying storage layer evolves.
 
+The LLM provider can run locally or in a datacentre because the application uses only LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL to configure it.
+
 ## License
 
 This project was created for educational purposes as part of the FlyRank Backend AI Engineering internship.
+
+
