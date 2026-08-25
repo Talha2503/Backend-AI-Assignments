@@ -1,0 +1,66 @@
+[
+  {
+    "id": 1,
+    "input": "I was charged twice for my subscription.",
+    "expected": {
+      "category": "billing",
+      "urgency": "normal"
+    }
+  },
+  {
+    "id": 2,
+    "input": "The app crashes every time I try to upload a profile picture.",
+    "expected": {
+      "category": "bug",
+      "urgency": "high"
+    }
+  },
+  {
+    "id": 3,
+    "input": "Please add dark mode to the dashboard.",
+    "expected": {
+      "category": "feature",
+      "urgency": "normal"
+    }
+  },
+  {
+    "id": 4,
+    "input": "My account was charged $50 but I don't recognize the transaction.",
+    "expected": {
+      "category": "billing",
+      "urgency": "high"
+    }
+  },
+  {
+    "id": 5,
+    "input": "The dashboard takes several seconds to load, but eventually works.",
+    "expected": {
+      "category": "bug",
+      "urgency": "low"
+    }
+  },
+  {
+    "id": 6,
+    "input": "It would be nice if the app supported exporting reports as PDF.",
+    "expected": {
+      "category": "feature",
+      "urgency": "low"
+    }
+  },
+  {
+    "id": 7,
+    "input": "Something is wrong with my account and I need help.",
+    "expected": {
+      "category": "other",
+      "urgency": "normal"
+    }
+  },
+  {
+    "id": 8,
+    "input": "Hello, I have a question.",
+    "expected": {
+      "category": "other",
+      "urgency": "normal"
+    }
+  }
+]
