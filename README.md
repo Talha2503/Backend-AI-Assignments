@@ -306,7 +306,18 @@ The API contract remains consistent while the underlying storage layer evolves.
 
 The LLM provider can run locally or in a datacentre because the application uses only LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL to configure it.
 
+## LLM Support Classification
+
+### Valid request
+
+curl -X POST http://127.0.0.1:8000/support/classify -H "Content-Type: application/json" -d "{\"text\":\"I was charged twice for my subscription\"}"
 ## License
+
+### Deliberately Broken request
+
+curl -X POST http://127.0.0.1:8000/support/classify -H "Content-Type: application/json" -d "{}"
+
+### LICENSE
 
 This project was created for educational purposes as part of the FlyRank Backend AI Engineering internship.
 

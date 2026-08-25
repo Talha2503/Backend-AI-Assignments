@@ -1,8 +1,13 @@
-from fastapi import FastAPI, HTTPException, Depends
+import os
+
+from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from database import init_db, get_connection
 from supabase_client import supabase
+from src.llm.schema import SupportRequest, SupportClassification
 
 
 security = HTTPBearer()
@@ -48,6 +53,22 @@ def get_current_user(
 
 
 app = FastAPI(title="Task API", version="1.0")
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path == "/support/classify":
+        for error in exc.errors():
+            location = error.get("loc", ())
+            field = location[-1] if location else "request"
+            return JSONResponse(
+                status_code=400,
+                content={"message": f"Invalid field: {field}"}
+            )
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
 
 init_db()
 
@@ -380,3 +401,23 @@ def delete_task(
         )
 
     return None
+
+@app.post(
+    "/support/classify",
+    response_model=SupportClassification,
+    summary="Classify a support message",
+    description="Classifies a support message using a stub until the LLM integration is added."
+)
+async def classify_support(payload: SupportRequest):
+    if os.getenv("LLM_STUB") == "1":
+        return {
+            "category": "other",
+            "urgency": "normal",
+            "confidence": 0.5,
+            "reason": "The support message could not be classified yet."
+        }
+
+    raise HTTPException(
+        status_code=503,
+        detail="LLM integration is not enabled yet"
+    )
