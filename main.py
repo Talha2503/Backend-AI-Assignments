@@ -23,6 +23,7 @@ from report_db import (
     create_report,
     update_report_path,
     get_report,
+    get_todays_report,
 )
 
 
@@ -42,6 +43,10 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class ReportCreateRequest(BaseModel):
+    force: bool = False
 
 
 def get_current_user(
@@ -102,6 +107,10 @@ init_db()
 # Initialize the SQLite reporting database.
 init_report_db()
 
+
+# ============================================================
+# AUTH ENDPOINTS
+# ============================================================
 
 @app.post(
     "/auth/signup",
@@ -180,6 +189,10 @@ def logout(current_user=Depends(get_current_user)):
         )
 
 
+# ============================================================
+# GENERAL ENDPOINTS
+# ============================================================
+
 @app.get(
     "/",
     summary="API info",
@@ -250,6 +263,10 @@ def protected_dashboard(current_user=Depends(get_current_user)):
         "email": current_user.email,
     }
 
+
+# ============================================================
+# TASK ENDPOINTS
+# ============================================================
 
 @app.get(
     "/tasks",
@@ -443,32 +460,49 @@ def delete_task(
 
 @app.post(
     "/reports",
-    status_code=201,
     summary="Generate a report",
     description=(
-        "Runs the complete reporting pipeline: query the SQLite "
-        "database, render the report as HTML, generate a PDF with "
-        "Playwright, store the PDF, and create a report record."
+        "Runs the complete reporting pipeline while preventing "
+        "duplicate reports on the same day unless force=true "
+        "is supplied."
     )
 )
-def create_report_endpoint():
-    # 1. Query and aggregate the report data.
+def create_report_endpoint(
+    payload: ReportCreateRequest | None = None
+):
+    # Missing request body means force=false.
+    force = payload.force if payload else False
+
+    # 1. Check whether a report has already been generated today.
+    if not force:
+        existing_report = get_todays_report()
+
+        if existing_report is not None:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "id": existing_report["id"],
+                    "file": f"/reports/{existing_report['id']}/file",
+                },
+            )
+
+    # 2. Query and aggregate the report data.
     report_data = getReportData()
 
-    # 2. Create the report record first so we have its ID.
+    # 3. Create the report record first so we have its ID.
     created_at = datetime.now(timezone.utc).isoformat()
 
     report_id = create_report(created_at)
 
-    # 3. Create the reports directory.
+    # 4. Create the reports directory.
     reports_dir = Path("reports")
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    # 4. Generate a unique PDF path based on the report ID.
+    # 5. Generate a unique PDF path based on the report ID.
     file_path = reports_dir / f"{report_id}.pdf"
 
     try:
-        # 5. Render HTML and generate the PDF.
+        # 6. Render HTML and generate the PDF.
         generate_pdf(
             report_data,
             str(file_path)
@@ -485,17 +519,20 @@ def create_report_endpoint():
             detail=f"Failed to generate report: {type(exc).__name__}"
         )
 
-    # 6. Store the generated PDF path.
+    # 7. Store the generated PDF path.
     update_report_path(
         report_id,
         str(file_path)
     )
 
-    # 7. Return the report ID and download link.
-    return {
-        "id": report_id,
-        "file": f"/reports/{report_id}/file",
-    }
+    # 8. Return the newly generated report.
+    return JSONResponse(
+        status_code=201,
+        content={
+            "id": report_id,
+            "file": f"/reports/{report_id}/file",
+        },
+    )
 
 
 @app.get(

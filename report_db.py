@@ -1,4 +1,6 @@
 import sqlite3
+from datetime import datetime, timezone
+
 
 DB_PATH = "report.db"
 
@@ -64,6 +66,29 @@ def get_report(report_id):
         WHERE id = ?
         """,
         (report_id,),
+    ).fetchone()
+
+    conn.close()
+
+    return dict(row) if row else None
+
+
+def get_todays_report():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    row = conn.execute(
+        """
+        SELECT id, path, created_at
+        FROM reports
+        WHERE created_at LIKE ?
+        AND path != ''
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (f"{today}%",),
     ).fetchone()
 
     conn.close()
