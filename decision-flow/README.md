@@ -7,16 +7,18 @@ Execution runs through Inngest; the frontend visualizes the flow using React Flo
 - Next.js 16 (App Router, TypeScript, Tailwind v4)
 - React Flow — visual node/edge canvas
 - Inngest — workflow orchestration
-- Groq (OpenAI-compatible SDK) — LLM decision calls
+- Groq (OpenAI-compatible SDK, model: openai/gpt-oss-20b) — LLM decision calls
 - Shadcn/ui (Radix UI, Nova preset) — UI components
+
+## Features
+- Add, connect, and edit AI decision nodes on an interactive canvas
+- Each node has a YES path and a NO path
+- Graph state persists to localStorage
+- Run Flow button triggers real execution via Inngest, calling Groq at each node for a strict YES/NO answer, and traversing the matching edge
+- Live visual execution state: node borders glow blue (running), green (YES), or red (NO)
+- Traversed edges animate with a dashed active-path effect
+- Terminal-style execution log panel shows each step's node, answer, and prompt in real time
 
 ## Setup
 1. `npm install`
 2. Create `.env.local` with:
-
-GROQ_API_KEY=your_key_here
-
-3. `npm run dev`
-
-## Status
-Phase 1 (Setup) complete. Phases 2–4 in progress.
