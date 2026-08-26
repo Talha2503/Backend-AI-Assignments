@@ -1,7 +1,7 @@
 import logging
 import uuid
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 import inngest
@@ -24,13 +24,10 @@ inngest_client = inngest.Inngest(
 
 # Request model for creating reports.
 class ReportRequest(BaseModel):
-    topic: str
+    topic: str | None = None
 
 
-# -----------------------------
-# Stage 1: Say Hello
-# -----------------------------
-
+# Stage 1: First background function.
 @inngest_client.create_function(
     fn_id="say-hello",
     trigger=inngest.TriggerEvent(
@@ -46,10 +43,7 @@ async def say_hello(ctx: inngest.Context) -> str:
     return "Hello from the background!"
 
 
-# -----------------------------
-# Stage 2 + Stage 3: Make Report
-# -----------------------------
-
+# Stage 2/3: Background report function.
 @inngest_client.create_function(
     fn_id="make-report",
     trigger=inngest.TriggerEvent(
@@ -61,17 +55,16 @@ async def make_report(ctx: inngest.Context):
     report_id = ctx.event.data["id"]
     topic = ctx.event.data["topic"]
 
-    # Simulate the slow report-generation work.
+    # Simulate slow work.
     await ctx.step.sleep(
         "do-the-slow-work",
         8,
     )
 
-    # Build the report and save it.
-    def build_report():
-        # Stage 3: intentionally fail this job to demonstrate retries.
+    # Build and save the report.
+    async def build_report():
         if topic == "fail":
-            raise RuntimeError("The report oven is broken!")
+            raise Exception("The report oven is broken!")
 
         result = {
             "summary": f"Report generated for topic: {topic}",
@@ -93,48 +86,71 @@ async def make_report(ctx: inngest.Context):
     )
 
 
-# -----------------------------
-# Serve Inngest
-# -----------------------------
+# Stage 4: Cron heartbeat.
+@inngest_client.create_function(
+    fn_id="heartbeat",
+    trigger=inngest.TriggerCron(
+        cron="* * * * *"
+    ),
+)
+async def heartbeat(ctx: inngest.Context):
+    pending = sum(
+        1 for report in reports.values()
+        if report["status"] == "pending"
+    )
 
+    done = sum(
+        1 for report in reports.values()
+        if report["status"] == "done"
+    )
+
+    failed = sum(
+        1 for report in reports.values()
+        if report["status"] == "failed"
+    )
+
+    message = (
+        f"Heartbeat: pending={pending}, "
+        f"done={done}, failed={failed}"
+    )
+
+    print(message)
+
+    return {
+        "pending": pending,
+        "done": done,
+        "failed": failed,
+    }
+
+
+# Serve all Inngest functions at /api/inngest.
 inngest.fast_api.serve(
     app,
     inngest_client,
-    [say_hello, make_report],
+    [say_hello, make_report, heartbeat],
 )
 
 
-# -----------------------------
-# Health
-# -----------------------------
-
+# Health check.
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# -----------------------------
-# Create Report
-# -----------------------------
-
-@app.post("/reports", status_code=status.HTTP_202_ACCEPTED)
-async def create_report(request: Request):
-    body = await request.json()
-
-    # Reject missing topic at the door.
-    if not body.get("topic"):
+# Create a report.
+@app.post("/reports", status_code=202)
+async def create_report(request: ReportRequest):
+    if not request.topic:
         raise HTTPException(
             status_code=400,
-            detail="topic is required",
+            detail="Topic is required",
         )
-
-    topic = body["topic"]
 
     report_id = str(uuid.uuid4())
 
     reports[report_id] = {
         "id": report_id,
-        "topic": topic,
+        "topic": request.topic,
         "status": "pending",
     }
 
@@ -143,7 +159,7 @@ async def create_report(request: Request):
             name="report/requested",
             data={
                 "id": report_id,
-                "topic": topic,
+                "topic": request.topic,
             },
         )
     )
@@ -154,10 +170,7 @@ async def create_report(request: Request):
     }
 
 
-# -----------------------------
-# Report Status
-# -----------------------------
-
+# Get report status.
 @app.get("/reports/{report_id}")
 def get_report(report_id: str):
     report = reports.get(report_id)
