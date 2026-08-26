@@ -2,6 +2,8 @@
 
 A secure REST API built with FastAPI, PostgreSQL, Docker, Supabase Authentication, and an LLM-powered support classification endpoint. The project also includes a SQLite-backed PDF report generator with aggregation queries, PDF rendering, download links, and business-level idempotency protection against duplicate report generation.
 
+The repository also contains a **Background Jobs with Inngest** implementation demonstrating asynchronous processing, polling, retries with backoff, input validation, and cron-triggered jobs.
+
 Built as part of the FlyRank Backend AI Engineering internship.
 
 ---
@@ -25,8 +27,11 @@ The project provides:
 * PDF report generation
 * Report download endpoints
 * Business-level idempotency for duplicate report requests
-
-The report generator produces a PDF from an orders dataset and exposes it through the API.
+* Inngest background jobs
+* Asynchronous report processing
+* Job status polling
+* Automatic retries with backoff
+* Cron-triggered heartbeat jobs
 
 ---
 
@@ -81,9 +86,678 @@ The report generator produces a PDF from an orders dataset and exposes it throug
 * Business-level duplicate-request protection
 * Optional `force` flag for intentionally generating a fresh report
 
+## Background Jobs with Inngest
+
+* Event-triggered background functions
+* Immediate `202 Accepted` responses
+* Asynchronous report processing
+* In-memory report status storage
+* Job status polling
+* Eventual consistency
+* Slow-work simulation using `step.sleep`
+* Report-building step using `step.run`
+* Automatic retries
+* Retry backoff
+* Input validation before sending events
+* Cron-triggered heartbeat function
+* Pending/done/failed report summaries
+* Inngest Development Server dashboard
+
 ---
 
-# Support Classification Endpoint
+# Background Jobs with Inngest
+
+The `background-jobs/` directory contains the Inngest implementation for asynchronous report generation.
+
+The goal of this assignment was to demonstrate an important production backend pattern:
+
+> Accept the request quickly, perform slow work in the background, and allow the client to check the job status later.
+
+Instead of making the client wait for a slow operation, the API immediately returns `202 Accepted` with a report ID.
+
+The background job then performs the slow work independently.
+
+---
+
+# Background Jobs Project Structure
+
+The relevant assignment is contained in:
+
+```text
+background-jobs/
+├── main.py
+├── README.md
+└── Inngest Server Screenshot *.PNG
+```
+
+The main FastAPI application exposes the API and Inngest functions through:
+
+```text
+http://localhost:8000
+```
+
+Inngest is served through:
+
+```text
+http://localhost:8000/api/inngest
+```
+
+---
+
+# Inngest Functions
+
+The project contains three Inngest functions.
+
+| Function      | Trigger            | Purpose                                        |
+| ------------- | ------------------ | ---------------------------------------------- |
+| `say-hello`   | `test/hello`       | Initial background-job test                    |
+| `make-report` | `report/requested` | Performs asynchronous report generation        |
+| `heartbeat`   | `* * * * *`        | Runs every minute and summarizes report states |
+
+---
+
+# 1. say-hello
+
+The first function was created to verify that FastAPI and Inngest were correctly connected.
+
+It is triggered by:
+
+```text
+test/hello
+```
+
+The function waits for five seconds using an Inngest step and then returns:
+
+```text
+Hello from the background!
+```
+
+This confirmed that the Inngest Development Server could discover and execute Python background functions.
+
+---
+
+# 2. make-report
+
+The `make-report` function is triggered by:
+
+```text
+report/requested
+```
+
+It performs the slow report-generation work in the background.
+
+The workflow contains two steps:
+
+```text
+do-the-slow-work
+        ↓
+build-report
+```
+
+The slow-work step uses:
+
+```text
+step.sleep("do-the-slow-work", 8)
+```
+
+as a stand-in for a real slow operation such as:
+
+* An AI API call
+* A large export
+* A database aggregation
+* A document-generation task
+* An external service request
+
+The second step builds the report result and updates the in-memory report map:
+
+```text
+status: done
+```
+
+---
+
+# 3. heartbeat
+
+The third Inngest function is:
+
+```text
+heartbeat
+```
+
+It uses a cron trigger:
+
+```text
+* * * * *
+```
+
+This means:
+
+```text
+Every minute
+```
+
+The one-minute schedule is intentionally used for testing.
+
+Each heartbeat run logs a summary containing the number of reports that are:
+
+* Pending
+* Done
+* Failed
+
+The clock is the only trigger for this function. It does not require an API endpoint or event.
+
+---
+
+# Running the Background Jobs Application
+
+The background-job assignment requires two terminals.
+
+## Terminal 1 — Start the FastAPI API
+
+From the project directory:
+
+```bash
+cd C:\dev\task-api\background-jobs
+```
+
+Start FastAPI with:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+The API will be available at:
+
+```text
+http://localhost:8000
+```
+
+The Inngest endpoint will be:
+
+```text
+http://localhost:8000/api/inngest
+```
+
+---
+
+## Terminal 2 — Start the Inngest Development Server
+
+From the same project:
+
+```bash
+npx inngest-cli@latest dev
+```
+
+The Inngest Development Server will normally be available at:
+
+```text
+http://localhost:8288
+```
+
+The dashboard can then be used to:
+
+* View discovered functions
+* Send test events
+* View runs
+* Inspect retries
+* Inspect failures
+* View cron executions
+* Inspect individual function steps
+
+---
+
+# Background Job API
+
+The asynchronous report system provides the following endpoints.
+
+| Method | Endpoint        | Description                    | Success |
+| ------ | --------------- | ------------------------------ | ------- |
+| POST   | `/reports`      | Create a background report job | `202`   |
+| GET    | `/reports/{id}` | Check report status            | `200`   |
+| GET    | `/health`       | API health check               | `200`   |
+
+Unknown report IDs return:
+
+```text
+404 Not Found
+```
+
+---
+
+# Asynchronous Report Workflow
+
+The complete workflow is:
+
+```text
+Client
+  |
+  | POST /reports
+  | {"topic":"cats"}
+  ↓
+FastAPI
+  |
+  | Create report ID
+  | Save status = pending
+  | Send report/requested event
+  ↓
+202 Accepted
+  |
+  | Client continues working
+  |
+  ↓
+Inngest
+  |
+  | make-report
+  ↓
+do-the-slow-work
+  |
+  | 8 seconds
+  ↓
+build-report
+  |
+  | Save result
+  ↓
+status = done
+  |
+  ↓
+Client polls GET /reports/{id}
+```
+
+This demonstrates **eventual consistency**.
+
+The client first sees:
+
+```text
+pending
+```
+
+and later sees:
+
+```text
+done
+```
+
+This is the same general pattern used by progress bars, asynchronous exports, report generation systems, and "we'll email you when it's ready" workflows.
+
+---
+
+# Creating a Report
+
+Send:
+
+```bash
+curl -i -X POST http://localhost:8000/reports -H "Content-Type: application/json" -d "{\"topic\":\"cats\"}"
+```
+
+The API immediately responds with:
+
+```text
+HTTP/1.1 202 Accepted
+```
+
+Example:
+
+```json
+{
+  "id": "e8362447-a608-43c3-97d5-4420a3266dd8",
+  "status": "pending"
+}
+```
+
+The important part is that the API does **not** wait for the eight-second background task.
+
+The request is accepted immediately.
+
+---
+
+# Polling the Report
+
+The returned ID can be used with:
+
+```bash
+curl -i http://localhost:8000/reports/e8362447-a608-43c3-97d5-4420a3266dd8
+```
+
+Once processing is complete, the API returns:
+
+```text
+HTTP/1.1 200 OK
+```
+
+with:
+
+```json
+{
+  "id": "e8362447-a608-43c3-97d5-4420a3266dd8",
+  "topic": "cats",
+  "status": "done",
+  "result": {
+    "summary": "Report generated for topic: cats",
+    "topic": "cats"
+  }
+}
+```
+
+The client can poll the endpoint repeatedly until the status changes from:
+
+```text
+pending
+```
+
+to:
+
+```text
+done
+```
+
+---
+
+# Unknown Report ID
+
+An unknown report ID returns:
+
+```text
+HTTP/1.1 404 Not Found
+```
+
+Example:
+
+```bash
+curl -i http://localhost:8000/reports/some-uuid
+```
+
+Response:
+
+```json
+{
+  "detail": "Report not found"
+}
+```
+
+This prevents clients from receiving information about nonexistent jobs.
+
+---
+
+# Stage 2 — 202 + Background Job + Status Endpoint
+
+The Stage 2 implementation demonstrates the fast-door pattern.
+
+The HTTP request only:
+
+1. Creates the report ID.
+2. Saves the pending report.
+3. Sends `report/requested`.
+4. Returns `202 Accepted`.
+
+The slow eight-second operation happens inside Inngest.
+
+This separates request handling from background work and prevents the API request from blocking while the report is generated.
+
+---
+
+# Stage 3 — Retries
+
+Background jobs can fail because of temporary problems such as:
+
+* Network failures
+* External service failures
+* Temporary database problems
+* Service interruptions
+
+The `make-report` function is configured with:
+
+```text
+retries = 2
+```
+
+This means an initial attempt plus two retries can occur.
+
+For testing, the function intentionally raises an error when the topic is:
+
+```text
+fail
+```
+
+The error is:
+
+```text
+The report oven is broken!
+```
+
+The expected behavior is:
+
+```text
+Attempt 1 → Failed
+     ↓
+   Wait
+     ↓
+Attempt 2 → Failed
+     ↓
+   Wait
+     ↓
+Attempt 3 → Failed
+```
+
+The increasing delays demonstrate **backoff**.
+
+The Inngest Development Server showed the failed `make-report` run with the error:
+
+```text
+The report oven is broken!
+```
+
+and a final status of:
+
+```text
+FAILED
+```
+
+---
+
+# Validation Before Background Processing
+
+A missing topic is not a temporary failure.
+
+Therefore the API validates the input before sending the Inngest event.
+
+If the request does not contain a topic:
+
+```text
+POST /reports
+```
+
+returns:
+
+```text
+400 Bad Request
+```
+
+and no background event is sent.
+
+This demonstrates the difference between **bad input** and a **temporary failure**:
+
+> Bad input should be rejected at the door, while a temporary failure during valid background work deserves a retry.
+
+---
+
+# Stage 3 Verification
+
+The Inngest dashboard showed the `make-report` function failing after its configured retry attempts.
+
+The failed run displayed:
+
+```text
+Function: make-report
+Trigger: report/requested
+Status: FAILED
+Error: The report oven is broken!
+```
+
+The dashboard run history also showed the execution timeline and repeated attempts.
+
+---
+
+# Stage 4 — Cron Heartbeat
+
+The fourth stage added a scheduled Inngest function called:
+
+```text
+heartbeat
+```
+
+Its cron expression is:
+
+```text
+* * * * *
+```
+
+This means:
+
+```text
+Every minute
+```
+
+The function runs automatically without an HTTP request or event.
+
+The dashboard successfully showed multiple heartbeat runs approximately one minute apart.
+
+Example:
+
+```text
+heartbeat
+* * * * *
+COMPLETED
+```
+
+The heartbeat summarizes:
+
+```text
+pending
+done
+failed
+```
+
+report counts.
+
+---
+
+# Cron Expressions
+
+Cron contains five fields:
+
+```text
+minute hour day-of-month month day-of-week
+```
+
+A `*` means "every".
+
+Examples:
+
+```text
+* * * * *
+```
+
+Every minute.
+
+```text
+0 8 * * *
+```
+
+Every day at 08:00.
+
+```text
+0 9 * * 1
+```
+
+Every Monday at 09:00.
+
+```text
+*/15 * * * *
+```
+
+Every 15 minutes.
+
+## Required cron answers
+
+To run the heartbeat every day at 08:00:
+
+```text
+0 8 * * *
+```
+
+To run the heartbeat every Sunday at 22:00:
+
+```text
+0 22 * * 0
+```
+
+Cron schedules should be checked against the server timezone because servers commonly run schedules in UTC.
+
+---
+
+# Inngest Dashboard Proof
+
+The Inngest Development Server successfully discovered all three functions:
+
+```text
+heartbeat
+make-report
+say-hello
+```
+
+The dashboard showed the cron trigger:
+
+```text
+* * * * *
+```
+
+for `heartbeat`.
+
+It also showed successful `make-report` executions and the intentionally failed retry demonstration.
+
+Example dashboard runs included:
+
+```text
+COMPLETED
+heartbeat
+* * * * *
+```
+
+and:
+
+```text
+FAILED
+make-report
+report/requested
+```
+
+The repository contains screenshots documenting the Inngest dashboard and completed stages.
+
+---
+
+# Background Jobs Verification
+
+The main checkpoints were successfully completed:
+
+| Checkpoint                           | Result   |
+| ------------------------------------ | -------- |
+| Inngest connected to FastAPI         | Complete |
+| `say-hello` function discovered      | Complete |
+| `make-report` discovered             | Complete |
+| `POST /reports` returns `202`        | Complete |
+| Background report processing         | Complete |
+| Report status polling                | Complete |
+| Unknown ID returns `404`             | Complete |
+| Failed report triggers retries       | Complete |
+| Final failed retry run visible       | Complete |
+| Missing topic rejected               | Complete |
+| `heartbeat` cron function discovered | Complete |
+| Multiple heartbeat runs visible      | Complete |
+| GitHub repository updated            | Complete |
+
+---
+
+# Original Support Classification Endpoint
 
 The AI endpoint accepts a customer support message and returns a structured classification.
 
@@ -484,7 +1158,7 @@ The database should not be committed to Git because it is generated from the see
 
 ---
 
-# Running the API
+# Running the Original API
 
 Start the complete application with Docker Compose:
 
@@ -690,14 +1364,7 @@ A third normal request also returned:
 HTTP/1.1 200 OK
 ```
 
-with the same report ID:
-
-```json
-{
-  "id": 1,
-  "file": "/reports/1/file"
-}
-```
+with the same report ID.
 
 The `reports/` directory did not receive another PDF from these repeated requests.
 
@@ -849,6 +1516,49 @@ This provides visual proof that the report-generation pipeline successfully prod
 
 ---
 
+# Background Job API Reference
+
+The asynchronous Inngest report endpoints are:
+
+| Method | Endpoint        | Description                  | Success |
+| ------ | --------------- | ---------------------------- | ------- |
+| POST   | `/reports`      | Queue an asynchronous report | 202     |
+| GET    | `/reports/{id}` | Poll report status           | 200     |
+| GET    | `/health`       | Health check                 | 200     |
+
+Example request:
+
+```json
+{
+  "topic": "cats"
+}
+```
+
+Example accepted response:
+
+```json
+{
+  "id": "e8362447-a608-43c3-97d5-4420a3266dd8",
+  "status": "pending"
+}
+```
+
+Example completed response:
+
+```json
+{
+  "id": "e8362447-a608-43c3-97d5-4420a3266dd8",
+  "topic": "cats",
+  "status": "done",
+  "result": {
+    "summary": "Report generated for topic: cats",
+    "topic": "cats"
+  }
+}
+```
+
+---
+
 # Environment Variables
 
 Copy `.env.example` to `.env`:
@@ -922,6 +1632,8 @@ Task data persists when Docker containers are stopped and recreated because Post
 
 The report database is reproducible through the seed script rather than being stored in Git.
 
+The Inngest background-job assignment intentionally uses an in-memory report map. Therefore background-job state is lost when the FastAPI process restarts. This is intentional for demonstrating the asynchronous job pattern rather than persistent job storage.
+
 ---
 
 # Project Structure
@@ -941,6 +1653,10 @@ task-api/
 ├── .env.example
 ├── .gitignore
 ├── README.md
+├── background-jobs/
+│   ├── main.py
+│   ├── README.md
+│   └── Inngest Server Screenshot *.PNG
 ├── evals/
 │   ├── cases.json
 │   └── run_eval.py
@@ -984,6 +1700,7 @@ Secrets are kept outside the source code.
 * Authentication failures are not retried.
 * The LLM can be disabled without a deployment.
 * Generated report files and the local report database are excluded from Git.
+* Background-job state is intentionally kept in memory for the Inngest assignment.
 
 Never commit real Supabase credentials, LLM API keys, access tokens, or other secrets to GitHub.
 
@@ -995,80 +1712,75 @@ The project is publicly available at:
 
 https://github.com/Talha2503/Backend-AI-Assignments
 
-The repository contains the completed Backend AI Engineering internship work, including the task API, LLM support classification pipeline, and PDF report generation stages.
+The repository contains the completed Backend AI Engineering internship work, including:
+
+* Task API
+* Authentication
+* LLM support classification
+* PDF report generation
+* Inngest background jobs
+* Asynchronous report processing
+* Retry handling
+* Cron scheduling
+* Verification screenshots
+* Documentation
 
 ---
 
-# Project Stages
+# Assignment Stages
 
-| Stage   | Description                                              | Status   |
-| ------- | -------------------------------------------------------- | -------- |
-| Stage 1 | LLM endpoint, input validation, output schema, stub mode | Complete |
-| Stage 2 | Versioned prompt and LLM integration                     | Complete |
-| Stage 3 | Parse, validate, repair once, quarantine on failure      | Complete |
-| Stage 4 | Generate and serve PDF reports by link                   | Complete |
-| Stage 5 | Duplicate requests make one report                       | Complete |
-| Stage 6 | Publish to GitHub and document the project               | Complete |
+The repository contains multiple independent backend assignments and stages.
+
+| Assignment / Stage      | Description                                              | Status   |
+| ----------------------- | -------------------------------------------------------- | -------- |
+| LLM Stage 1             | LLM endpoint, input validation, output schema, stub mode | Complete |
+| LLM Stage 2             | Versioned prompt and LLM integration                     | Complete |
+| LLM Stage 3             | Parse, validate, repair once, quarantine on failure      | Complete |
+| PDF Stage 4             | Generate and serve PDF reports by link                   | Complete |
+| PDF Stage 5             | Duplicate requests make one report                       | Complete |
+| Background Jobs Stage 1 | Connect Inngest and run first background function        | Complete |
+| Background Jobs Stage 2 | `202` + background job + status endpoint                 | Complete |
+| Background Jobs Stage 3 | Retries and bad-input rejection                          | Complete |
+| Background Jobs Stage 4 | Cron heartbeat                                           | Complete |
+| Background Jobs Stage 5 | Publish to GitHub and documentation                      | Complete |
 
 ---
 
-# Stage 6 — Publish and Documentation
+# Background Jobs Stage 5 — Publish and Documentation
 
-Stage 6 makes the work reproducible by another developer.
-
-The repository is public and contains:
-
-* Source code
-* Report-generation pipeline
-* Seed script
-* SQL aggregation logic
-* API endpoints
-* `.gitignore`
-* README documentation
-* Verification commands
-* PDF screenshot
-* GitHub repository link
-
-Generated artifacts are intentionally excluded:
+The background-job assignment is publicly available inside:
 
 ```text
-reports/
-report.db
+background-jobs/
 ```
 
-A new developer can recreate the report database using:
+The documentation explains:
 
-```bash
-python seed.py
-```
+* What the application does
+* How to start the FastAPI server
+* How to start the Inngest Development Server
+* Available API endpoints
+* Inngest functions
+* Asynchronous report processing
+* Polling
+* Retries
+* Backoff
+* Input validation
+* Cron scheduling
+* Dashboard verification
 
-start the API using:
-
-```bash
-docker compose up --build
-```
-
-and generate/download a report using:
-
-```bash
-curl -i -X POST http://localhost:8000/reports
-```
-
-followed by:
-
-```bash
-curl -o my-report.pdf http://localhost:8000/reports/1/file
-```
+A developer can run the API and Inngest Development Server in two terminals and reproduce the background-job workflow.
 
 ---
 
 # Earlier Storage Stages
 
-| Stage           | Storage               | Persistence |
-| --------------- | --------------------- | ----------- |
-| Week 2          | Python in-memory list | No          |
-| Week 3          | SQLite                | Yes         |
-| Current project | PostgreSQL in Docker  | Yes         |
+| Stage                      | Storage                     | Persistence |
+| -------------------------- | --------------------------- | ----------- |
+| Week 2                     | Python in-memory list       | No          |
+| Week 3                     | SQLite                      | Yes         |
+| Current project            | PostgreSQL in Docker        | Yes         |
+| Background Jobs assignment | Python in-memory report map | No          |
 
 The API contract remains consistent while the underlying storage layer evolves.
 
@@ -1079,6 +1791,8 @@ The API contract remains consistent while the underlying storage layer evolves.
 I would improve the urgency classification rules and expand the evaluation set beyond eight cases, because the current `support-v1` prompt achieved **62.5% (5/8)** and all three failures were caused by incorrect urgency rather than category classification.
 
 For the report generator, I would also add stronger concurrent-request protection, such as a database-level uniqueness constraint or transaction/locking strategy, if the service were being deployed with multiple API workers.
+
+For the background-job implementation, I would replace the in-memory report map with persistent job storage in a production deployment so report status survives API restarts and can be shared across multiple workers.
 
 ---
 
